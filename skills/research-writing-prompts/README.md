@@ -32,9 +32,5 @@ Or trigger it with natural language requests such as:
 ## Contents
 
 - `SKILL.md`: main skill definition
-- `references/`: source prompt library and project-specific rewrite constraints
+- `references/`: source prompt library and prompt index
 - `agents/`: optional agent config
-
-## Note
-
-This version includes a project-specific PLC-aware PCB benchmark rewrite mode in `references/plc_aware_pcb_benchmark_rewrite.md`.

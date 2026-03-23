@@ -45,5 +45,5 @@ Use this file first. It maps common writing tasks to the corresponding sections 
 ## Selection Guidance
 
 - If the user already supplied paper text, prefer direct execution of the chosen prompt logic.
-- If the user wants a reusable prompt for later, return the original prompt plus a customized project-specific version.
+- If the user wants a reusable prompt for later, return the original prompt plus a customized task-specific version.
 - If the user is unsure which prompt family to use, inspect the task intent first, then choose the narrowest matching section.

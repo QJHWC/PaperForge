@@ -1,6 +1,6 @@
 ---
 name: research-writing-prompts
-description: Use when the user wants paper-writing prompt templates or wants Codex to automatically choose and apply the best prompt logic for tasks such as 翻译, 润色, 改写, 缩写, 扩写, 逻辑检查, reviewer审稿, 去AI味, 实验分析, 图表标题生成, 模型选择, or converting a strong external prompt collection into a reusable paper-writing workflow. Includes a project-specific PLC-aware PCB benchmark rewrite mode.
+description: Use when the user wants paper-writing prompt templates or wants Codex to automatically choose and apply the best prompt logic for tasks such as 翻译, 润色, 改写, 缩写, 扩写, 逻辑检查, reviewer审稿, 去AI味, 实验分析, 图表标题生成, 模型选择, or converting a strong external prompt collection into a reusable paper-writing workflow.
 ---
 
 # Research Writing Prompts
@@ -28,26 +28,8 @@ This skill turns the prompt library from `QJHWC/awesome-ai-research-writing` int
 3. Load only the needed section from [references/awesome-ai-research-writing.md](references/awesome-ai-research-writing.md).
 4. Choose one of three output modes:
    - `prompt-only`: return the best prompt template.
-   - `prompt-plus-adaptation`: return the source prompt plus a version customized for the user's project.
+   - `prompt-plus-adaptation`: return the source prompt plus a version customized for the user's task or paper.
    - `direct-execution`: apply the prompt logic internally and return the finished writing/result.
-
-## Project-Specific Mode: PLC-Aware PCB Benchmark Rewrite
-
-When the task concerns the PCB manuscript centered on a PLC-aware benchmark under unified training protocols, load [references/plc_aware_pcb_benchmark_rewrite.md](references/plc_aware_pcb_benchmark_rewrite.md) before using the generic prompt library.
-
-Use this mode when the user mentions:
-- PLC-aware benchmark
-- unified training protocol
-- edge PCB defect detection
-- DeepPCB 1350/150
-- Ours-LW, YOLO11n, or `sim_rpi5`
-- TII manuscript rewrite for the benchmark storyline
-
-This mode overrides generic polishing behavior in four ways:
-1. The paper is a benchmark/framework paper, not a single-model novelty paper.
-2. Claims that require new evidence, new figures, or new experiments must be gated by local artifacts.
-3. English and Chinese polishing must remove formulaic AI-style narration without changing measured values, citations, or claim boundaries.
-4. Section titles, figure logic, and framework exposition must follow the benchmark storyline: problem definition -> framework construction -> benchmark experiments -> attribution diagnostics.
 
 ## Intent Router
 
@@ -100,7 +82,7 @@ When the user already provides manuscript text, prefer `direct-execution` after 
 ## Usage Rules
 
 1. Prefer direct execution when the user has already supplied text, figures, tables, or a LaTeX section to edit.
-2. Prefer `prompt-plus-adaptation` when the user says a prompt is useful and wants a reusable project-specific version.
+2. Prefer `prompt-plus-adaptation` when the user says a prompt is useful and wants a reusable task-specific version.
 3. Prefer `prompt-only` when the user explicitly asks for the template itself.
 4. Preserve the user's target format:
    - LaTeX for paper source editing.
@@ -124,16 +106,8 @@ For benchmark-style papers, prefer prompt logic that emphasizes:
 - reviewer-facing justification,
 - and distinction between recognition ranking and deployment ranking.
 
-For the PLC-aware PCB benchmark project, additionally enforce:
-- industrial-informatics framing that connects computer vision with OT/PLC decision logic,
-- justification of the 1350/150 split from the small-sample industrial setting,
-- no iterative lab-notebook narration,
-- no post hoc excuses about reruns or split mistakes,
-- no unsupported completion claims for Table IV, cross-dataset all-baseline transfer, or simulated edge metrics.
-
 ## References
 
 - Use [references/prompt-index.md](references/prompt-index.md) as the navigation layer.
 - Use [references/awesome-ai-research-writing.md](references/awesome-ai-research-writing.md) as the source prompt library.
-- Use [references/plc_aware_pcb_benchmark_rewrite.md](references/plc_aware_pcb_benchmark_rewrite.md) as the project-level hard constraint set for the current PCB benchmark paper.
 - Do not load the entire prompt library unless the user is explicitly asking for a broad survey of all prompts.
