@@ -1,415 +1,245 @@
-const state = {
-  title: "PaperForge Console",
-  subtitle: "前端现在由 app.js 单点渲染，展示内容只指向仓库中真实存在的 Agent / Skill / MCP / 文档与最小桥接层。",
-  release: "bridge-baseline-v2",
-  frontendMode: "static-rendered",
-  workflows: [
-    {
-      id: "scientist",
-      title: "Scientist",
-      stages: ["idea_generation", "novelty_check", "experiment", "writeup", "review", "improvement", "re_review"],
-      entrypoint: "launch_scientist.py",
-      status: "bridge"
-    },
-    {
-      id: "mvp",
-      title: "MVP",
-      stages: ["bootstrap", "cloud", "feedback", "optimize", "refine"],
-      entrypoint: "launch_mvp_workflow.py",
-      status: "bridge"
-    },
-    {
-      id: "writeup",
-      title: "Writeup",
-      stages: ["init", "cite", "refine", "latex_fix", "done"],
-      entrypoint: "engine/perform_writeup.py + launch_mvp_workflow.py --phase refine",
-      status: "bridge"
-    }
-  ],
-  agents: [
-    {
-      id: "paperforge-coordinator",
-      title: "PaperForgeCoordinator",
-      responsibility: "统一入口、schema 暴露、前端动作路由",
-      path: "../agents/coordinator.py",
-      status: "bridge"
-    },
-    {
-      id: "scientist-workflow-agent",
-      title: "ScientistWorkflowAgent",
-      responsibility: "桥接现有 scientist CLI，返回统一 status / trace / artifacts",
-      path: "../agents/scientist_workflow_agent.py",
-      status: "bridge"
-    },
-    {
-      id: "mvp-workflow-agent",
-      title: "MvpWorkflowAgent",
-      responsibility: "桥接现有 MVP phase CLI，保留现有锁与工件语义",
-      path: "../agents/mvp_workflow_agent.py",
-      status: "bridge"
-    },
-    {
-      id: "writeup-agent",
-      title: "WriteupAgent",
-      responsibility: "桥接 scientist / mvp 的 writeup 入口，并暴露 writeup skill map",
-      path: "../agents/writeup_agent.py",
-      status: "bridge"
-    }
-  ],
-  skills: [
-    {
-      id: "write-section",
-      summary: "章节起草",
-      path: "../skills/write-section",
-      status: "live"
-    },
-    {
-      id: "refine-section",
-      summary: "章节精修",
-      path: "../skills/refine-section",
-      status: "live"
-    },
-    {
-      id: "citation-gap",
-      summary: "引文缺口识别",
-      path: "../skills/citation-gap",
-      status: "live"
-    },
-    {
-      id: "citation-select",
-      summary: "候选文献筛选",
-      path: "../skills/citation-select",
-      status: "live"
-    },
-    {
-      id: "latex-fix",
-      summary: "LaTeX 局部修复",
-      path: "../skills/latex-fix",
-      status: "skeleton"
-    },
-    {
-      id: "de-aigc-rewrite",
-      summary: "去机器味改写",
-      path: "../skills/de-aigc-rewrite",
-      status: "skeleton"
-    }
-  ],
-  mcpServers: [
-    {
-      id: "literature",
-      summary: "接现有文献检索引擎，支持 search / bibtex / dedupe",
-      path: "../mcp_servers/literature/server.py",
-      status: "live"
-    },
-    {
-      id: "bibliography",
-      summary: "最小文献管理器，支持 BibTeX 导入导出、去重、section 映射",
-      path: "../mcp_servers/bibliography/server.py",
-      status: "live"
-    },
-    {
-      id: "file-gateway",
-      summary: "锁感知的 workspace 快照、读写文本网关",
-      path: "../mcp_servers/file-gateway/server.py",
-      status: "skeleton"
-    },
-    {
-      id: "remote-runner",
-      summary: "桥接 cloud cycle / sync 入口，默认以计划模式返回命令",
-      path: "../mcp_servers/remote-runner/server.py",
-      status: "skeleton"
-    },
-    {
-      id: "diagram",
-      summary: "Mermaid 结构图与图注建议生成",
-      path: "../mcp_servers/diagram/server.py",
-      status: "skeleton"
-    },
-    {
-      id: "aigc-eval",
-      summary: "轻量重复短语与相似度启发式检查",
-      path: "../mcp_servers/aigc-eval/server.py",
-      status: "skeleton"
-    }
-  ],
-  bibliography: {
-    storage: "../engine/bibliography.py",
-    features: [
-      "workspace/artifacts/bibliography/library.json 存储模型",
-      "BibTeX 导入导出",
-      "按 DOI / 标题 + 年份去重",
-      "section -> citation key 映射",
-      "供 writeup / citation bridge 复用"
-    ],
-    caveat: "当前是本地文件存储和 MCP bridge，不是完整多用户文献平台。"
-  },
-  docs: [
-    "../docs/paperforge-workflow-equivalence-spec.md",
-    "../docs/paperforge-agent-skill-mcp-mapping.md",
-    "../docs/paperforge-safe-upgrade-roadmap.md",
-    "../docs/paperforge-equivalence-matrix.md",
-    "../docs/paperforge-json-artifact-contracts.md",
-    "../docs/paperforge-single-writer-locking.md"
-  ],
-  tests: [
-    "tests/test_agent_bridges.py",
-    "tests/test_bibliography.py",
-    "tests/test_locking.py",
-    "tests/test_smoke.py"
-  ],
-  backlog: [
-    "动态 API / 实时任务状态还未接入",
-    "MCP 远程执行和图生成仍是最小骨架",
-    "writeup 真实 LLM skill 化尚未替换核心 engine 循环"
-  ]
+// PaperForge 工作台 — 实时状态前端
+// 每 5 秒自动从 /api/workspaces 拉取真实数据
+
+const REFRESH_MS = 5000;
+
+const PHASE_ORDER = ["bootstrap", "feedback", "optimize", "refine", "cloud"];
+
+const PHASE_LABEL = {
+  bootstrap_running: "Bootstrap 运行中",
+  bootstrap_completed: "Bootstrap 完成",
+  feedback_running: "Feedback 运行中",
+  feedback_completed: "Feedback 完成",
+  optimize_running: "Optimize 运行中",
+  optimize_completed: "Optimize 完成",
+  refine_running: "Refine 运行中",
+  refine_completed: "Refine 完成",
+  cloud_running: "Cloud 运行中",
+  cloud_completed: "Cloud 完成",
 };
 
-function badgeClass(status) {
-  if (status === "live") return "badge badge-live";
-  if (status === "bridge") return "badge badge-bridge";
-  if (status === "doc") return "badge badge-doc";
-  return "badge badge-skeleton";
+function phaseColor(phase) {
+  if (!phase) return "#aaa";
+  if (phase.endsWith("_running")) return "#b7791f";
+  if (phase.endsWith("_completed")) return "#2d6a4f";
+  return "#675d52";
 }
 
-function badgeLabel(status) {
-  if (status === "live") return "live";
-  if (status === "bridge") return "bridge";
-  if (status === "doc") return "docs";
-  return "skeleton";
+function phaseProgress(phase) {
+  if (!phase) return 0;
+  const name = phase.replace(/_running|_completed/, "");
+  const idx = PHASE_ORDER.indexOf(name);
+  if (idx === -1) return 0;
+  const base = (idx / PHASE_ORDER.length) * 100;
+  const extra = phase.endsWith("_completed") ? (1 / PHASE_ORDER.length) * 100 : 0;
+  return Math.round(base + extra);
 }
 
-function openPath(path) {
-  window.location.href = path;
+function timeAgo(iso) {
+  if (!iso) return "—";
+  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (diff < 60) return `${diff}s 前`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m 前`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h 前`;
+  return `${Math.floor(diff / 86400)}d 前`;
 }
 
-function renderMetrics() {
-  const liveSkills = state.skills.filter(item => item.status === "live").length;
-  const liveMcp = state.mcpServers.filter(item => item.status === "live").length;
+async function fetchWorkspaces() {
+  const res = await fetch("/api/workspaces");
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function fetchWorkspaceDetail(ws) {
+  const rel = ws.replace(/^.*\/results\//, "results/");
+  const res = await fetch(`/api/workspace/${rel}`);
+  if (!res.ok) return null;
+  return res.json();
+}
+
+function renderPhaseBar(phase) {
+  const pct = phaseProgress(phase);
+  const color = phaseColor(phase);
+  const label = PHASE_LABEL[phase] || phase || "未开始";
   return `
-    <div class="metrics">
-      <div class="metric">
-        <div class="label">Workflow Entrypoints</div>
-        <div class="value">${state.workflows.length}</div>
-        <div class="sub">Scientist / MVP / Writeup 都有真实桥接入口。</div>
+    <div style="margin-top:10px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+        <span style="color:${color};font-weight:600">${label}</span>
+        <span style="color:#675d52">${pct}%</span>
       </div>
-      <div class="metric">
-        <div class="label">Agent Bridges</div>
-        <div class="value">${state.agents.length}</div>
-        <div class="sub">统一输出 command、trace、artifacts、schema。</div>
+      <div style="height:6px;border-radius:999px;background:#e8dfd4;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:${color};border-radius:999px;transition:width 0.4s"></div>
       </div>
-      <div class="metric">
-        <div class="label">Skill Contracts</div>
-        <div class="value">${liveSkills}/${state.skills.length}</div>
-        <div class="sub">4 个实装 + 2 个最小骨架，全部有 schema 和示例 I/O。</div>
-      </div>
-      <div class="metric">
-        <div class="label">MCP Services</div>
-        <div class="value">${liveMcp}/${state.mcpServers.length}</div>
-        <div class="sub">文献与 bibliography 可跑，其他服务已具备统一启动面。</div>
-      </div>
-    </div>
-  `;
+    </div>`;
 }
 
-function renderTimeline() {
+function renderWorkspaceCard(ws) {
+  const state = ws.state || {};
+  const phase = state.phase || state.current_phase || null;
+  const updatedAt = state.updated_at || null;
+  const ideaName = state.idea_name || ws.run_name || "—";
+  const runCount = ws.run_count || 0;
+
   return `
-    <div class="timeline">
-      ${state.workflows
-        .map(
-          workflow => `
-            <div class="step">
-              <div>
-                <strong>${workflow.title}</strong>
-                <div class="sub">${workflow.entrypoint}</div>
-              </div>
-              <div><code>${workflow.stages.join(" → ")}</code></div>
-              <div class="${badgeClass(workflow.status)}">${badgeLabel(workflow.status)}</div>
-            </div>
-          `
-        )
-        .join("")}
-    </div>
-  `;
+    <div class="ws-card" data-workspace="${ws.workspace}" style="
+      background:rgba(255,250,244,0.86);
+      border:1px solid rgba(48,37,24,0.12);
+      border-radius:18px;
+      padding:20px;
+      cursor:pointer;
+      transition:box-shadow 0.2s;
+    ">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div>
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:#a4492a;margin-bottom:4px">${ws.experiment}</div>
+          <div style="font-weight:600;font-size:15px">${ideaName}</div>
+          <div style="font-size:12px;color:#675d52;margin-top:2px">${ws.run_name}</div>
+        </div>
+        <div style="text-align:right;font-size:12px;color:#675d52">
+          <div>${runCount} 次实验</div>
+          <div style="margin-top:2px">${timeAgo(updatedAt)}</div>
+        </div>
+      </div>
+      ${renderPhaseBar(phase)}
+    </div>`;
 }
 
-function renderTable(items, headers) {
+function renderDetail(detail) {
+  if (!detail) return `<div style="padding:20px;color:#675d52">加载失败</div>`;
+  const state = detail.state || {};
+  const phase = state.phase || state.current_phase || "—";
+  const runs = detail.runs || [];
+  const latex = detail.latex || {};
+  const notes = detail.notes_preview || "";
+
   return `
-    <table>
-      <thead>
-        <tr>${headers.map(item => `<th>${item}</th>`).join("")}</tr>
-      </thead>
-      <tbody>
-        ${items.join("")}
-      </tbody>
-    </table>
-  `;
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <div>
+        <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#675d52;margin-bottom:8px">当前阶段</div>
+        <div style="font-size:18px;font-weight:700;color:${phaseColor(phase)}">${PHASE_LABEL[phase] || phase}</div>
+        ${renderPhaseBar(phase)}
+      </div>
+
+      <div>
+        <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#675d52;margin-bottom:8px">实验运行（${runs.length} 次）</div>
+        ${runs.map(r => `
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(48,37,24,0.08);font-size:13px">
+            <span>${r.name}</span>
+            <span style="color:${r.has_result ? '#2d6a4f' : '#675d52'}">${r.has_result ? '✓ 有结果' : '无结果'}</span>
+          </div>`).join("")}
+      </div>
+
+      ${latex.pdf_files && latex.pdf_files.length ? `
+        <div>
+          <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#675d52;margin-bottom:8px">LaTeX 输出</div>
+          ${latex.pdf_files.map(f => `<div style="font-size:13px;color:#2d6a4f">📄 ${f}</div>`).join("")}
+          ${latex.tex_files.map(f => `<div style="font-size:13px;color:#675d52">📝 ${f}</div>`).join("")}
+        </div>` : ""}
+
+      ${notes ? `
+        <div>
+          <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:#675d52;margin-bottom:8px">Notes 预览</div>
+          <pre style="
+            white-space:pre-wrap;word-break:break-word;
+            background:#261d15;color:#f9f1e7;
+            padding:14px;border-radius:12px;
+            font-size:11px;line-height:1.6;
+            max-height:200px;overflow:auto;
+            margin:0;
+          ">${notes.replace(/</g, "&lt;")}</pre>
+        </div>` : ""}
+    </div>`;
 }
 
-function renderAgents() {
-  const rows = state.agents.map(
-    agent => `
-      <tr>
-        <td><code>${agent.title}</code></td>
-        <td>${agent.responsibility}</td>
-        <td><a href="${agent.path}">${agent.path.replace("../", "")}</a></td>
-        <td><span class="${badgeClass(agent.status)}">${badgeLabel(agent.status)}</span></td>
-      </tr>
-    `
-  );
-  return renderTable(rows, ["Agent", "职责", "路径", "状态"]);
-}
+// ── 主渲染 ──────────────────────────────────────────────────────
 
-function renderSkills() {
-  const rows = state.skills.map(
-    skill => `
-      <tr>
-        <td><code>${skill.id}</code></td>
-        <td>${skill.summary}</td>
-        <td><a href="${skill.path}/SKILL.md">${skill.path.replace("../", "")}</a></td>
-        <td><span class="${badgeClass(skill.status)}">${badgeLabel(skill.status)}</span></td>
-      </tr>
-    `
-  );
-  return renderTable(rows, ["Skill", "用途", "路径", "状态"]);
-}
+let selectedWorkspace = null;
+let lastData = null;
 
-function renderMcp() {
-  const rows = state.mcpServers.map(
-    server => `
-      <tr>
-        <td><code>${server.id}</code></td>
-        <td>${server.summary}</td>
-        <td><a href="${server.path}">${server.path.replace("../", "")}</a></td>
-        <td><span class="${badgeClass(server.status)}">${badgeLabel(server.status)}</span></td>
-      </tr>
-    `
-  );
-  return renderTable(rows, ["MCP", "用途", "路径", "状态"]);
-}
-
-function renderDocButtons() {
-  return state.docs
-    .map(path => `<button data-path="${path}">${path.split("/").pop().replace(".md", "")}</button>`)
-    .join("");
-}
-
-function renderTests() {
-  return `
-    <div class="mini-list">
-      ${state.tests
-        .map(
-          testPath => `
-            <div class="mini-item">
-              <code>${testPath}</code>
-            </div>
-          `
-        )
-        .join("")}
-    </div>
-  `;
-}
-
-function render() {
+async function render() {
   const root = document.getElementById("app");
+  let data;
+  try {
+    data = await fetchWorkspaces();
+    lastData = data;
+  } catch (e) {
+    root.innerHTML = `<div style="padding:40px;color:#a4492a">⚠ 无法连接到后端服务: ${e.message}<br><small>请确保 python frontend/server.py 已运行</small></div>`;
+    return;
+  }
+
+  const workspaces = data.workspaces || [];
+  const selected = selectedWorkspace;
+
+  // 如果有选中的 workspace，拉取详情
+  let detail = null;
+  if (selected) {
+    detail = await fetchWorkspaceDetail(selected);
+  }
+
   root.innerHTML = `
-    <div class="shell">
-      <section class="hero">
-        <div class="card hero-main">
-          <div class="eyebrow">Rendered By app.js</div>
-          <h1>${state.title}</h1>
-          <p class="hero-copy">${state.subtitle}</p>
-          <div class="status-strip">
-            <span class="pill">版本: <strong>${state.release}</strong></span>
-            <span class="pill">前端模式: <strong>${state.frontendMode}</strong></span>
-            <span class="pill">展示原则: <strong>show only real files</strong></span>
-          </div>
-        </div>
-        <aside class="card hero-side">
-          <h2>当前边界</h2>
-          <p class="sub">这还是静态前端，没有后台 API，也不会直接改工作区。但页面里列出的 Agent / Skill / MCP / 测试文件都已经在仓库中落地。</p>
-          <div class="legend">
-            <span class="badge badge-live">live</span>
-            <span class="badge badge-bridge">bridge</span>
-            <span class="badge badge-skeleton">skeleton</span>
-          </div>
-        </aside>
-      </section>
+    <div style="width:min(1200px,calc(100vw - 32px));margin:0 auto;padding:28px 0 48px">
 
-      <section class="card panel span-12">
-        <h2>完成度</h2>
-        ${renderMetrics()}
-      </section>
+      <!-- Header -->
+      <div style="margin-bottom:24px">
+        <div style="display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;background:rgba(164,73,42,0.08);color:#a4492a;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:12px">
+          ● LIVE
+        </div>
+        <h1 style="font-family:'Iowan Old Style','Palatino Linotype',Georgia,serif;font-size:clamp(34px,4vw,54px);margin:0 0 8px;letter-spacing:-0.02em">PaperForge 工作台</h1>
+        <div style="color:#675d52;font-size:14px">实时监控研究流水线状态 · 每 ${REFRESH_MS/1000} 秒自动刷新</div>
+      </div>
 
-      <section class="grid">
-        <div class="card panel span-8">
-          <h2>工作流与入口</h2>
-          <p class="sub">工作流顺序仍由现有 CLI / engine 保持，agent 层只做统一 schema、trace、artifact 输出与路由。</p>
-          ${renderTimeline()}
+      <!-- 统计条 -->
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px">
+        <div style="padding:10px 16px;border-radius:12px;border:1px solid rgba(48,37,24,0.12);background:#fffdf9;font-size:13px">
+          📁 <strong>${workspaces.length}</strong> 个 Workspace
         </div>
-        <div class="card panel span-4">
-          <h2>文档与检查</h2>
-          <p class="sub">README、结构图、前端状态和自动化 smoke/regression 已按当前仓库状态对齐。</p>
-          <div class="actions">${renderDocButtons()}</div>
+        <div style="padding:10px 16px;border-radius:12px;border:1px solid rgba(48,37,24,0.12);background:#fffdf9;font-size:13px">
+          🔬 <strong>${workspaces.reduce((s, w) => s + (w.run_count || 0), 0)}</strong> 次实验
         </div>
-      </section>
+        <div style="padding:10px 16px;border-radius:12px;border:1px solid rgba(48,37,24,0.12);background:#fffdf9;font-size:13px">
+          ⏱ 上次刷新: <strong>${new Date().toLocaleTimeString("zh-CN")}</strong>
+        </div>
+      </div>
 
-      <section class="grid">
-        <div class="card panel span-7">
-          <h2>Agent 层</h2>
-          ${renderAgents()}
-        </div>
-        <div class="card panel span-5">
-          <h2>Bibliography 最小落地</h2>
-          <p class="sub"><code>${state.bibliography.storage.replace("../", "")}</code></p>
-          <ul>
-            ${state.bibliography.features.map(item => `<li>${item}</li>`).join("")}
-          </ul>
-          <p class="sub" style="margin-top: 14px;">${state.bibliography.caveat}</p>
-        </div>
-      </section>
+      <!-- 主体 -->
+      <div style="display:grid;grid-template-columns:${selected ? '1fr 380px' : '1fr'};gap:20px">
 
-      <section class="grid">
-        <div class="card panel span-6">
-          <h2>Skill 层</h2>
-          ${renderSkills()}
+        <!-- Workspace 列表 -->
+        <div>
+          <h2 style="font-family:'Iowan Old Style',Georgia,serif;font-size:20px;margin:0 0 14px">Workspace 列表</h2>
+          ${workspaces.length === 0
+            ? `<div style="padding:40px;text-align:center;color:#675d52;border:1px dashed rgba(48,37,24,0.2);border-radius:18px">暂无 Workspace<br><small>运行 launch_mvp_workflow.py --phase bootstrap 创建</small></div>`
+            : `<div style="display:grid;gap:12px">${workspaces.map(renderWorkspaceCard).join("")}</div>`
+          }
         </div>
-        <div class="card panel span-6">
-          <h2>MCP 层</h2>
-          ${renderMcp()}
-        </div>
-      </section>
 
-      <section class="grid">
-        <div class="card panel span-5">
-          <h2>自动化检查</h2>
-          <p class="sub">验收矩阵已落到 unittest smoke / lock / contract / bridge regression。</p>
-          ${renderTests()}
-        </div>
-        <div class="card panel span-7">
-          <h2>仍是骨架的部分</h2>
-          <ul>
-            ${state.backlog.map(item => `<li>${item}</li>`).join("")}
-          </ul>
-          <div class="mono-preview">${JSON.stringify(
-            {
-              workflows: state.workflows.length,
-              agents: state.agents.length,
-              skills: state.skills.length,
-              mcpServers: state.mcpServers.length,
-              docs: state.docs.length,
-              tests: state.tests.length
-            },
-            null,
-            2
-          )}</div>
-        </div>
-      </section>
-    </div>
-  `;
+        <!-- 详情面板 -->
+        ${selected ? `
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+              <h2 style="font-family:'Iowan Old Style',Georgia,serif;font-size:20px;margin:0">详情</h2>
+              <button id="close-detail" style="border:none;background:none;cursor:pointer;font-size:18px;color:#675d52">✕</button>
+            </div>
+            <div style="background:rgba(255,250,244,0.86);border:1px solid rgba(48,37,24,0.12);border-radius:18px;padding:20px">
+              ${renderDetail(detail)}
+            </div>
+          </div>` : ""}
+      </div>
+    </div>`;
 
-  root.querySelectorAll("[data-path]").forEach(button => {
-    button.addEventListener("click", () => openPath(button.dataset.path));
+  // 事件绑定
+  root.querySelectorAll(".ws-card").forEach(card => {
+    card.addEventListener("mouseenter", () => card.style.boxShadow = "0 8px 24px rgba(54,37,20,0.14)");
+    card.addEventListener("mouseleave", () => card.style.boxShadow = "");
+    card.addEventListener("click", () => {
+      selectedWorkspace = card.dataset.workspace === selectedWorkspace ? null : card.dataset.workspace;
+      render();
+    });
   });
+
+  const closeBtn = root.querySelector("#close-detail");
+  if (closeBtn) closeBtn.addEventListener("click", () => { selectedWorkspace = null; render(); });
 }
 
 render();
+setInterval(render, REFRESH_MS);

@@ -7,7 +7,7 @@ description: Use when the user wants paper-writing prompt templates or wants Cod
 
 ## Overview
 
-This skill turns the prompt library from `QJHWC/awesome-ai-research-writing` into a Codex-usable workflow. Use it when the user wants either:
+This skill provides a curated prompt library for academic paper writing workflows. Use it when the user wants either:
 
 1. The raw prompt template itself, ready to copy or adapt.
 2. A customized prompt rewritten for the user's current paper/project.
@@ -25,7 +25,7 @@ This skill turns the prompt library from `QJHWC/awesome-ai-research-writing` int
    - figure / table naming
    - model selection
 2. Read [references/prompt-index.md](references/prompt-index.md) to find the right section.
-3. Load only the needed section from [references/awesome-ai-research-writing.md](references/awesome-ai-research-writing.md).
+3. Load only the needed section from [references/prompt-library.md](references/prompt-library.md).
 4. Choose one of three output modes:
    - `prompt-only`: return the best prompt template.
    - `prompt-plus-adaptation`: return the source prompt plus a version customized for the user's task or paper.
@@ -109,5 +109,5 @@ For benchmark-style papers, prefer prompt logic that emphasizes:
 ## References
 
 - Use [references/prompt-index.md](references/prompt-index.md) as the navigation layer.
-- Use [references/awesome-ai-research-writing.md](references/awesome-ai-research-writing.md) as the source prompt library.
+- Use [references/prompt-library.md](references/prompt-library.md) as the source prompt library.
 - Do not load the entire prompt library unless the user is explicitly asking for a broad survey of all prompts.

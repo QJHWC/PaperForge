@@ -12,3 +12,5 @@ key.sh
 remote.yaml
 
 .DS_Store
+
+.claude/

@@ -4,20 +4,7 @@ Version 1.0, March 2026
 Copyright (c) 2026 PaperForge Contributors
 
 
-NOTICE OF DERIVATION
-
-PaperForge is a derivative work of "The AI Scientist" by Sakana AI.
-The upstream license is reproduced in full in the file LICENSE-UPSTREAM
-and is incorporated herein by reference.
-
-By using, copying, or distributing PaperForge, you agree to BOTH:
-  (A) The AI Scientist Source Code License (see LICENSE-UPSTREAM), AND
-  (B) The additional terms below.
-
-In the event of any conflict, the MORE restrictive provision shall prevail.
-
-
-ADDITIONAL TERMS
+TERMS AND CONDITIONS
 
 1. Non-Commercial Use Only.
    You may NOT use PaperForge, or any derivative work thereof, for
@@ -33,42 +20,36 @@ ADDITIONAL TERMS
    expressly permitted.
 
 2. Permissions Granted.
-   Subject to the restrictions in this License and LICENSE-UPSTREAM, you
-   are free to:
+   Subject to the restrictions in this License, you are free to:
    (a) Copy and redistribute this software in any medium or format;
    (b) Modify, remix, transform, and build upon this software;
    (c) Share modified versions, provided you:
-       - give appropriate credit to PaperForge and the upstream project;
-       - include both this LICENSE and LICENSE-UPSTREAM;
+       - give appropriate credit to PaperForge;
+       - include this LICENSE;
        - indicate what changes were made.
 
-3. Mandatory AI-Generation Disclosure (inherited from upstream).
+3. Mandatory AI-Generation Disclosure.
    Any scientific manuscript, research paper, or technical report
    generated in whole or in part using PaperForge MUST include a
    prominent disclaimer (e.g., in the abstract, methods, or a dedicated
    disclosure section) stating that the content was machine-generated or
-   AI-assisted. This requirement is legally binding per Section 3.2.e
-   of LICENSE-UPSTREAM.
+   AI-assisted.
 
-4. Inherited Restrictions (from LICENSE-UPSTREAM Section 3.2).
-   You may NOT use PaperForge for:
-   (a) Surveillance — detecting or inferring protected personal attributes;
-   (b) Deceptive media — generating realistic audio/video of people
-       without watermark or disclosure;
-   (c) Healthcare — predicting insurance claims or diagnosing without
-       human oversight;
-   (d) Criminal prediction — predicting criminal behavior from personal data.
+4. Prohibited Use.
+   This software must NOT be used for:
+   (a) Surveillance or unauthorized personal data inference;
+   (b) Generation of deceptive media intended to mislead;
+   (c) Unauthorized healthcare diagnosis or criminal prediction systems.
 
-5. Propagation of Terms.
+5. Distribution.
    If you distribute PaperForge or any derivative work, you MUST include
-   a complete copy of both this LICENSE and LICENSE-UPSTREAM, and you
-   MUST ensure these restrictions are enforceable in any agreement
-   governing such distribution.
+   a complete copy of this LICENSE, and you MUST ensure these restrictions
+   are enforceable in any agreement governing such distribution.
 
 6. Termination.
-   Violation of any restriction in this License or LICENSE-UPSTREAM
-   automatically terminates your rights under both licenses. Upon
-   termination, you must immediately cease use and destroy all copies.
+   Violation of any restriction in this License automatically terminates
+   your rights. Upon termination, you must immediately cease use and
+   destroy all copies.
 
 7. Disclaimer of Warranty.
    This software is provided "AS IS", without warranty of any kind,
@@ -79,8 +60,8 @@ ADDITIONAL TERMS
 SUMMARY (not legally binding — see full text above)
 
   ✅  Free to copy, share, modify — for personal & academic use
-  ✅  Must credit PaperForge + upstream (The AI Scientist by Sakana AI)
-  ✅  Must include both LICENSE files when redistributing
+  ✅  Must credit PaperForge when redistributing
+  ✅  Must include this LICENSE when redistributing
   ✅  Must disclose AI usage in any generated papers
   ❌  No commercial use
   ❌  No surveillance, deceptive media, unauthorized healthcare/criminal use

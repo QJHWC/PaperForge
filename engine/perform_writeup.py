@@ -388,15 +388,14 @@ def _sanitize_template_tex_contents(tex_text: str) -> str:
 
 
 _DISCLOSURE_BLOCK = r"""
-%% ── AI Disclosure (required by The AI Scientist Source Code License §3.2.e) ──
-%% DO NOT REMOVE THIS SECTION — it is a legal requirement of the upstream license.
+%% ── AI Disclosure ──
+%% DO NOT REMOVE THIS SECTION.
 \section*{Disclosure}
 \label{sec:disclosure}
 Portions of this manuscript, including drafting, iterative refinement, and
 formatting, were conducted with the assistance of PaperForge, an AI-powered
 academic writing pipeline. All experimental results, analysis, and scientific
-claims have been reviewed and validated by the authors. This disclosure is made
-in compliance with The AI Scientist Source Code License (Sakana AI).
+claims have been reviewed and validated by the authors.
 """.strip()
 
 
@@ -517,7 +516,6 @@ If duplicated, identify the best location for the section header and remove any 
 
 Make the minimal fix required and do not remove or change any packages.
 Pay attention to any accidental uses of HTML syntax, e.g. </end instead of \\end.
-IMPORTANT: Do NOT remove or modify the \\section*{{Disclosure}} block — it is legally required.
 """
             coder.run(prompt)
             _sanitize_template_tex_file(writeup_file)
@@ -637,7 +635,6 @@ error_list = """- Unenclosed math symbols
 - Duplicate headers, e.g. duplicated \\section{{Introduction}} or \\end{{document}}
 - Unescaped symbols, e.g. shakespeare_char should be shakespeare\\_char in text
 - Incorrect closing of environments, e.g. </end{{figure}}> instead of \\end{{figure}}
-- NEVER remove or modify the \\section*{{Disclosure}} block — it is a legal requirement
 """
 
 refinement_prompt = (

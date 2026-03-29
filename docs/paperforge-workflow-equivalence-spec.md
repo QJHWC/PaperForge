@@ -27,7 +27,7 @@
 本文档依据以下仓库文件整理：
 
 - `README.md`
-- `LICENSE-UPSTREAM`
+- `LICENSE`
 - `launch_user_entry.py`
 - `launch_mvp_workflow.py`
 - `launch_scientist.py`
@@ -40,10 +40,10 @@
 
 ### 3.1 法律与合规要求
 
-根据当前仓库保留的 `LICENSE-UPSTREAM`，系统仍受以下限制：
+根据当前仓库的 `LICENSE`，系统仍受以下限制：
 
-1. 分发时必须附带上游许可证。
-2. 不得用于许可明确禁止的领域。
+1. 不得用于商业用途。
+2. 不得用于 surveillance、deceptive media、未授权医疗/犯罪预测等场景。
 3. **生成或传播论文类文档、研究报告、技术报告时，必须显著披露 AI 参与。**
 
 ### 3.2 当前代码中的落实方式

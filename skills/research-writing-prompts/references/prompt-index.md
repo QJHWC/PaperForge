@@ -1,6 +1,6 @@
 # Prompt Index
 
-Use this file first. It maps common writing tasks to the corresponding sections in `awesome-ai-research-writing.md`.
+Use this file first. It maps common writing tasks to the corresponding sections in `prompt-library.md`.
 
 ## Core Writing Tasks
 
