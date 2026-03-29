@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+
+.venv/
+.venv*/
+
+results/
+workspace/*
+!workspace/README.md
+
+key.sh
+remote.yaml
+
+.DS_Store

@@ -1,0 +1,76 @@
+{
+  "paper_writing_pipeline": {
+    "means": {
+      "draft_quality_mean": 0.9369419885481545,
+      "citation_coverage_mean": 0.8489420039735858,
+      "coherence_mean": 0.9822528311592114,
+      "readability_mean": 0.7158396228852264,
+      "revision_efficiency_mean": 0.7836648280973733,
+      "overall_score_mean": 0.8688559709777883,
+      "total_train_time_mean": 0.0314563512802124
+    },
+    "stderrs": {
+      "draft_quality_stderr": 0.0004939387728328279,
+      "citation_coverage_stderr": 0.003577654920517375,
+      "coherence_stderr": 0.005327730466113429,
+      "readability_stderr": 0.01171627082898589,
+      "revision_efficiency_stderr": 0.003543136579540552,
+      "overall_score_stderr": 0.004626826532927223,
+      "total_train_time_stderr": 0.022192254496017208
+    },
+    "final_info_dict": {
+      "draft_quality": [
+        0.9376405234596765,
+        0.9362434536366323
+      ],
+      "citation_coverage": [
+        0.8540015720836722,
+        0.8438824358634992
+      ],
+      "coherence": [
+        0.9897873798410574,
+        0.9747182824773655
+      ],
+      "readability": [
+        0.7324089319920145,
+        0.6992703137784383
+      ],
+      "revision_efficiency": [
+        0.7886755799014997,
+        0.7786540762932468
+      ],
+      "overall_score": [
+        0.8753992918114017,
+        0.862312650144175
+      ],
+      "config": [
+        {
+          "workspace_mode": "paper_writer",
+          "structure_depth": 1.0,
+          "evidence_ratio": 1.0,
+          "revision_rounds": 3,
+          "citation_density": 1.0,
+          "rounds": 6,
+          "steps_per_round": 8,
+          "seed": 0,
+          "out_dir": "run_0"
+        },
+        {
+          "workspace_mode": "paper_writer",
+          "structure_depth": 1.0,
+          "evidence_ratio": 1.0,
+          "revision_rounds": 3,
+          "citation_density": 1.0,
+          "rounds": 6,
+          "steps_per_round": 8,
+          "seed": 1,
+          "out_dir": "run_0"
+        }
+      ],
+      "total_train_time": [
+        0.06284093856811523,
+        7.176399230957031e-05
+      ]
+    }
+  }
+}

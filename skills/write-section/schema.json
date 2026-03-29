@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "required": ["section_name", "notes"],
+  "properties": {
+    "section_name": { "type": "string" },
+    "notes": { "type": "string" },
+    "idea_metadata": { "type": ["object", "null"] },
+    "style_policy": { "type": ["string", "null"] },
+    "existing_tex_context": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+}

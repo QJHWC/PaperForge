@@ -1,0 +1,4 @@
+interface:
+  display_name: "Research Writing Prompts"
+  short_description: "Prompt library for paper writing and review"
+  default_prompt: "Use $research-writing-prompts to choose and apply the best prompt template for my paper-writing task."

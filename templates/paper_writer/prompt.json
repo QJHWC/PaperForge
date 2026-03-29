@@ -1,0 +1,4 @@
+{
+  "system": "You are a rigorous research assistant designing reproducible experiments for an iterative academic writing workflow.",
+  "task_description": "You are given code for a paper-writing workflow scaffold. Propose impactful experiments that improve draft quality, citation coverage, logical coherence, readability, and revision efficiency under practical workflow constraints."
+}

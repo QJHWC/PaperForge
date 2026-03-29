@@ -1,0 +1,44 @@
+# PaperForge remote execution config
+# Copy to remote.yaml and fill in your server details.
+# remote.yaml is git-ignored.
+
+host: "your-gpu-server.example.com"
+port: 22
+username: "root"
+
+auth:
+  # "key" or "password"
+  method: key
+  key_path: "~/.ssh/id_rsa"
+  # passphrase: "$SSH_KEY_PASSPHRASE"   # optional, supports $ENV_VAR
+  # password: "$SSH_PASSWORD"            # only when method=password
+
+remote_workdir: "/root/experiment"
+
+# Local paths to upload (files or directories)
+upload_paths:
+  - "./workspace/results/paper_writer/my_experiment"
+
+upload_excludes:
+  - "__pycache__"
+  - ".git"
+  - "*.pyc"
+  - ".DS_Store"
+  - "*.egg-info"
+
+# Command to run on the remote server after upload
+train_command: "cd /root/experiment && bash run_train.sh"
+
+# Remote directory containing results to download
+results_dir: "/root/experiment/outputs"
+
+download_excludes:
+  - "__pycache__"
+  - "*.pyc"
+  - ".git"
+
+# Seconds between status checks (for future async support)
+poll_interval_seconds: 30
+
+# SSH connection timeout in seconds
+connect_timeout: 15

@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "required": ["latex_text"],
+  "properties": {
+    "latex_text": { "type": "string" },
+    "diagnostics": {
+      "type": ["array", "null"],
+      "items": { "type": "string" }
+    },
+    "current_round": { "type": ["integer", "null"] }
+  },
+  "additionalProperties": false
+}

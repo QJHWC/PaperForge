@@ -1,0 +1,9 @@
+{
+  "section_name": "Method",
+  "draft_text": "\\section{Method}\nWe introduce a staged writeup controller with checkpoint-aware refinement and citation augmentation.\n\n% Style policy: concise, technical, reviewer-friendly\n% Existing context: \\section{Introduction}\n",
+  "outline": [
+    "State the purpose of Method.",
+    "Ground the section in available notes and experiment evidence.",
+    "Keep the narrative compatible with downstream citation/refinement phases."
+  ]
+}

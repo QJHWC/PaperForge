@@ -1,0 +1,26 @@
+[
+  {
+    "Name": "structured_revision_checklist",
+    "Title": "Structured Revision Checklist for Draft Stability",
+    "Experiment": "Introduce a section-level revision checklist with explicit pass/fail criteria for clarity, evidence linkage, and claim consistency. Compare overall_score, coherence, and readability across runs.",
+    "Interestingness": 8,
+    "Feasibility": 9,
+    "Novelty": 7
+  },
+  {
+    "Name": "citation_gap_closing",
+    "Title": "Citation Gap Closing with Targeted Literature Refresh",
+    "Experiment": "Add a citation-gap scan stage that identifies unsupported claims and triggers focused literature refresh. Measure citation_coverage and draft_quality improvements versus baseline.",
+    "Interestingness": 8,
+    "Feasibility": 8,
+    "Novelty": 7
+  },
+  {
+    "Name": "reviewer_driven_refinement",
+    "Title": "Reviewer-Driven Refinement Loop for Faster Convergence",
+    "Experiment": "Integrate reviewer feedback tags into the next revision prompt and track whether fewer revision rounds are needed to reach the same overall_score.",
+    "Interestingness": 7,
+    "Feasibility": 9,
+    "Novelty": 6
+  }
+]

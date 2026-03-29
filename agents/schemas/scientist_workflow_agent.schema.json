@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "required": ["experiment"],
+  "properties": {
+    "experiment": { "type": "string" },
+    "model": { "type": "string" },
+    "idea_model": { "type": ["string", "null"] },
+    "code_model": { "type": ["string", "null"] },
+    "writeup_model": { "type": ["string", "null"] },
+    "review_model": { "type": "string" },
+    "writeup": { "type": "string", "enum": ["latex"] },
+    "skip_idea_generation": { "type": "boolean", "default": false },
+    "skip_novelty_check": { "type": "boolean", "default": false },
+    "parallel": { "type": "integer", "minimum": 0 },
+    "improvement": { "type": "boolean", "default": false },
+    "gpus": { "type": ["string", "null"] },
+    "num_ideas": { "type": "integer", "minimum": 1 },
+    "engine": { "type": "string", "enum": ["openalex", "semanticscholar"] },
+    "execute": { "type": "boolean", "default": false }
+  },
+  "additionalProperties": false
+}

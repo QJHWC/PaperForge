@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "required": ["section_name", "section_text"],
+  "properties": {
+    "section_name": { "type": "string" },
+    "section_text": { "type": "string" },
+    "tips": { "type": ["string", "null"] },
+    "error_list": {
+      "type": ["array", "null"],
+      "items": { "type": "string" }
+    },
+    "style_policy": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+}

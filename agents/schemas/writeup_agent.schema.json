@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "required": ["workflow_kind"],
+  "properties": {
+    "workflow_kind": { "type": "string", "enum": ["mvp", "scientist"] },
+    "workspace": { "type": ["string", "null"] },
+    "folder": { "type": ["string", "null"] },
+    "writeup_model": { "type": "string" },
+    "engine": { "type": "string", "enum": ["openalex", "semanticscholar"] },
+    "refine_profile": { "type": "string", "enum": ["fast", "balanced", "deep"] },
+    "no_writing": { "type": "boolean", "default": false },
+    "execute": { "type": "boolean", "default": false }
+  },
+  "additionalProperties": false
+}
