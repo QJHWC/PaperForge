@@ -11,6 +11,8 @@ PaperForge 将 idea 生成、实验编码、云端训练和 LaTeX 论文写作�
 - `scientist` — 全自动：idea → experiment → writeup → review → improvement
 - `mvp` — 分阶段：bootstrap → feedback → optimize → refine → cloud
 
+![PaperForge 界面预览](docs/images/screenshot.png)
+
 ## 快速开始
 
 ### 1. 环境准备
