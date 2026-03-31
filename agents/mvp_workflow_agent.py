@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -50,6 +50,8 @@ class MvpWorkflowConfig:
     cloud_skip_run: bool = False
     cloud_skip_sync: bool = False
     execute: bool = False
+    rubric_profile: str = "default"
+    evidence_files: list[str] = field(default_factory=list)
 
 
 def _append_flag(command: List[str], flag: str, enabled: bool) -> None:
@@ -134,6 +136,8 @@ class MvpWorkflowAgent:
             cloud_skip_run=bool(kwargs.get("cloud_skip_run", False)),
             cloud_skip_sync=bool(kwargs.get("cloud_skip_sync", False)),
             execute=bool(kwargs.get("execute", False)),
+            rubric_profile=str(kwargs.get("rubric_profile", "default")),
+            evidence_files=list(kwargs.get("evidence_files", []) or []),
         )
 
     def build_command(self, cfg: MvpWorkflowConfig) -> List[str]:
@@ -150,6 +154,9 @@ class MvpWorkflowAgent:
         _append_option(command, "--optimize-runs", cfg.optimize_runs)
         _append_option(command, "--refine-profile", cfg.refine_profile)
         _append_option(command, "--literature-top-k", cfg.literature_top_k)
+        _append_option(command, "--rubric-profile", cfg.rubric_profile)
+        for evidence_file in cfg.evidence_files:
+            _append_option(command, "--evidence-file", evidence_file)
         _append_option(command, "--cloud-run-dir", cfg.cloud_run_dir)
         _append_option(command, "--pipeline-root", cfg.pipeline_root)
         _append_option(command, "--pipeline-config", cfg.pipeline_config)

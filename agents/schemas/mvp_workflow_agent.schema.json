@@ -21,6 +21,8 @@
     "refine_profile": { "type": "string", "enum": ["fast", "balanced", "deep"] },
     "refresh_literature": { "type": "boolean", "default": false },
     "literature_top_k": { "type": "integer", "minimum": 1 },
+    "rubric_profile": { "type": "string", "enum": ["default", "cvpr", "journal_q2"] },
+    "evidence_files": { "type": "array", "items": { "type": "string" } },
     "run_cloud_cycle": { "type": "boolean", "default": false },
     "cloud_run_dir": { "type": ["string", "null"] },
     "pipeline_root": { "type": ["string", "null"] },

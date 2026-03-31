@@ -506,6 +506,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--refresh-literature", action="store_true")
     p.add_argument("--literature-top-k", type=int, default=5)
+    p.add_argument(
+        "--rubric-profile",
+        choices=["default", "cvpr", "journal_q2"],
+        default="default",
+    )
+    p.add_argument("--evidence-file", action="append", default=[])
 
     p.add_argument("--run-cloud-cycle", action="store_true")
     p.add_argument(

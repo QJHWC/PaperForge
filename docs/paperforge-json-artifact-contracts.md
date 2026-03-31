@@ -323,7 +323,29 @@
 
 ## 9. PDF / TeX / 目录工件契约
 
-## 9.1 scientist 工件
+## 9.1 research_partner 工件
+
+| 工件 | 位置 | 含义 |
+| --- | --- | --- |
+| `idea_brief.json` | `<workspace>/artifacts/research_partner/` | Proposal 的问题定义、novelty 与证据基础 |
+| `claim_graph.json` | `<workspace>/artifacts/research_partner/` | Proposal 的轻量 claim graph |
+| `critique_report.json` | `<workspace>/artifacts/research_partner/` | critique 摘要、优势、风险与开放问题 |
+| `proposal_brief.md` | `<workspace>/artifacts/research_partner/` | 面向阅读的 Proposal Markdown 摘要 |
+| `experiment_blueprint.json` | `<workspace>/artifacts/research_partner/` | 实验轨道、验证问题与成功信号 |
+| `expected_figures.json` | `<workspace>/artifacts/research_partner/` | 预期图表清单与对应实验轨道 |
+| `rubric_scorecard.json` | `<workspace>/artifacts/research_partner/` | rubric 总分、维度评分、blocking issues 与 recommendation |
+| `evidence_index.json` | `<workspace>/artifacts/research_partner/` | 证据源索引，路径应保持 workspace 相对化 |
+| `manifest.json` | `<workspace>/artifacts/research_partner/` | 本次 proposal bundle 的总清单、生成文件与流程元数据 |
+
+### 冻结规则
+未来升级时：
+
+- `research_partner` 工件路径统一保持在 `<workspace>/artifacts/research_partner/`
+- 对外暴露路径必须保持 workspace 相对化，不能泄露绝对路径
+- `manifest.json` 必须能回链 `generated_files` 与输入 `evidence_files`
+- 新增工件时应在不破坏现有键名的前提下扩展
+
+## 9.2 scientist 工件
 
 | 工件 | 位置 | 含义 |
 | --- | --- | --- |
@@ -363,6 +385,7 @@
 | `workflow_state.json` | MVP workflow orchestrator |
 | `writeup_checkpoint.json` | Writeup engine |
 | `upload_manifest.json` | Upload ingest flow |
+| `research_partner/*` | Research partner proposal bundle |
 | `notes.txt` | workflow / feedback / writeup |
 | `template.tex` | writeup engine |
 | 阶段 PDF | writeup / compile flow |

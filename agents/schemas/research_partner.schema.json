@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "required": ["experiment"],
+  "properties": {
+    "experiment": { "type": "string" },
+    "run_dir": { "type": ["string", "null"] },
+    "engine": { "type": "string", "enum": ["openalex", "semanticscholar"] },
+    "idea_name": { "type": "string" },
+    "title": { "type": "string" },
+    "description": { "type": "string" },
+    "literature_top_k": { "type": "integer", "minimum": 1 },
+    "rubric_profile": { "type": "string", "enum": ["default", "cvpr", "journal_q2"] },
+    "evidence_files": { "type": "array", "items": { "type": "string" } },
+    "execute": { "type": "boolean", "default": false }
+  },
+  "additionalProperties": false
+}

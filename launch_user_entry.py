@@ -2,14 +2,87 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable, Dict, Iterable, Optional
+from types import SimpleNamespace
+from typing import Any, Callable, Dict, Iterable, Iterator, Optional
+
+from engine.research_partner.proposal_bundle import materialize_proposal_bundle
 
 
 ROOT = Path(__file__).resolve().parent
+_WORKSPACE_DONE_PATTERN = re.compile(r"\[done\]\s+workspace=(.+)")
+_EMBEDDED_POSIX_PATH_PATTERN = re.compile(r'(^|[=\s\'"(\[{])(/[^\s\'"\)\]\}]+)')
+_MATERIALIZATION_ENV_KEYS = {
+    "PAPERFORGE_CLAUDE_OPENAI_COMPAT",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_WRITEUP_API_KEY",
+    "OPENAI_WRITEUP_BASE_URL",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
+}
+
+
+def _sanitize_cli_text(text: str) -> str:
+    sanitized = text.replace(str(ROOT), ".")
+    sanitized = sanitized.replace(str(ROOT.resolve()), ".")
+    return sanitized
+
+
+def _sanitize_path_value(value: str) -> str:
+    cleaned = _sanitize_cli_text(str(value).strip())
+    if not cleaned:
+        return cleaned
+    if cleaned.startswith("~/"):
+        cleaned = str(Path(cleaned).expanduser())
+    if cleaned.startswith("/"):
+        name = Path(cleaned).name.strip()
+        return name or "[redacted]"
+    return cleaned
+
+
+def _sanitize_embedded_paths(text: str) -> str:
+    sanitized = text
+    while True:
+        updated = _EMBEDDED_POSIX_PATH_PATTERN.sub(
+            lambda match: f"{match.group(1)}{_sanitize_path_value(match.group(2))}",
+            sanitized,
+        )
+        if updated == sanitized:
+            return updated
+        sanitized = updated
+
+
+def _sanitize_cli_value(value: Any) -> str:
+    if isinstance(value, (list, tuple)):
+        rendered = ", ".join(_sanitize_cli_value(item) for item in value)
+        return f"[{rendered}]"
+    return _sanitize_embedded_paths(str(value))
+
+
+def _materialization_env(env: Dict[str, str]) -> Dict[str, str]:
+    return {key: env_value for key, env_value in env.items() if key in _MATERIALIZATION_ENV_KEYS}
+
+
+@contextmanager
+def _temporary_env(overrides: Dict[str, str]) -> Iterator[None]:
+    previous = {key: os.environ.get(key) for key in overrides}
+    try:
+        for key, value in overrides.items():
+            os.environ[key] = value
+        yield
+    finally:
+        for key, previous_value in previous.items():
+            if previous_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous_value
 
 
 def _in_virtualenv() -> bool:
@@ -104,6 +177,8 @@ def _is_claude_model_name(model: Optional[str]) -> bool:
 
 
 def _uses_claude_models(args: argparse.Namespace) -> bool:
+    if getattr(args, "entry", None) == "research_partner":
+        return True
     model_candidates = [
         getattr(args, "model", None),
         getattr(args, "idea_model", None),
@@ -178,9 +253,9 @@ def _print_effective_configuration(
 ) -> None:
     print("[entry]", args.entry)
     print("[claude_protocol]", args.claude_protocol)
-    print("[command]", " ".join(cmd))
+    print("[command]", " ".join(_sanitize_cli_value(part) for part in cmd))
     if passthrough:
-        print("[passthrough]", " ".join(passthrough))
+        print("[passthrough]", " ".join(_sanitize_cli_value(part) for part in passthrough))
 
     print("[config] precedence: CLI > ENV > default")
     for arg_name in sorted(vars(args)):
@@ -190,7 +265,7 @@ def _print_effective_configuration(
             "anthropic_api_key",
         }:
             continue
-        print(f"[config][arg] {arg_name}={getattr(args, arg_name)}")
+        print(f"[config][arg] {arg_name}={_sanitize_cli_value(getattr(args, arg_name))}")
 
     print(
         "[config][api] OPENAI_API_KEY=",
@@ -319,6 +394,69 @@ def _build_mvp_cmd(args: argparse.Namespace, passthrough: list[str]) -> list[str
     return cmd
 
 
+def _build_research_cmd(args: argparse.Namespace, passthrough: list[str]) -> list[str]:
+    if passthrough:
+        extras = " ".join(passthrough)
+        raise SystemExit(f"research_partner 不支持额外参数: {extras}")
+    cmd = [sys.executable, str(ROOT / "launch_mvp_workflow.py")]
+    _append_opt(cmd, "--phase", "bootstrap")
+    _append_opt(cmd, "--experiment", args.experiment)
+    _append_opt(cmd, "--run-dir", args.run_dir)
+    _append_opt(cmd, "--engine", args.engine)
+    _append_opt(cmd, "--idea-name", args.idea_name)
+    _append_opt(cmd, "--title", args.title)
+    _append_opt(cmd, "--description", args.description)
+    _append_opt(cmd, "--literature-top-k", args.literature_top_k)
+    _append_opt(cmd, "--rubric-profile", args.rubric_profile)
+    for evidence_file in getattr(args, "evidence_file", []) or []:
+        _append_opt(cmd, "--evidence-file", evidence_file)
+    _append_flag(cmd, "--skip-mvp-run", True)
+    _append_flag(cmd, "--skip-writeup", True)
+    _append_flag(cmd, "--refresh-literature", True)
+    return cmd
+
+
+def _materialization_error_message(exc: Exception) -> str:
+    detail = _sanitize_cli_value(str(exc).splitlines()[0]) if str(exc).strip() else ""
+    if detail and detail != exc.__class__.__name__:
+        return f"research_partner materialization failed: {exc.__class__.__name__}: {detail}"
+    return f"research_partner materialization failed: {exc.__class__.__name__}"
+
+
+def _maybe_materialize_research_partner(
+    *,
+    entry: str,
+    args: argparse.Namespace,
+    completed,
+    materialize_env: Optional[Dict[str, str]] = None,
+) -> None:
+    if entry != "research_partner" or getattr(completed, "returncode", 1) != 0:
+        return
+    explicit_run_dir = _clean_optional(getattr(args, "run_dir", None))
+    if explicit_run_dir is not None:
+        workspace = (ROOT / explicit_run_dir).expanduser().resolve()
+    else:
+        stdout = str(getattr(completed, "stdout", "") or "")
+        match = _WORKSPACE_DONE_PATTERN.search(stdout)
+        if not match:
+            return
+        workspace_value = match.group(1).strip().replace("\\r", "").replace("\\n", "")
+        workspace = Path(workspace_value).expanduser().resolve()
+    try:
+        with _temporary_env(materialize_env or {}):
+            materialize_proposal_bundle(
+                workspace=workspace,
+                title=args.title,
+                description=args.description,
+                rubric_profile=args.rubric_profile,
+                evidence_files=list(getattr(args, "evidence_file", []) or []),
+            )
+    except ValueError as exc:
+        raise SystemExit(_sanitize_cli_value(str(exc))) from exc
+    except Exception as exc:
+        raise SystemExit(_materialization_error_message(exc)) from exc
+
+
 def _add_common_api_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--claude-protocol",
@@ -387,6 +525,8 @@ def build_parser() -> argparse.ArgumentParser:
     mvp.add_argument("--skip-mvp-run", action="store_true")
     mvp.add_argument("--refresh-literature", action="store_true")
     mvp.add_argument("--run-cloud-cycle", action="store_true")
+    mvp.add_argument("--cloud-skip-run", action="store_true")
+    mvp.add_argument("--cloud-skip-sync", action="store_true")
     mvp.add_argument("--cloud-run-dir", default=None)
     mvp.add_argument("--pipeline-root", default=None)
     mvp.add_argument("--pipeline-config", default=None)
@@ -394,10 +534,65 @@ def build_parser() -> argparse.ArgumentParser:
     mvp.add_argument("--pipeline-mode", choices=["auto", "real", "sim"], default=None)
     mvp.add_argument("--pipeline-hardware-profile", default=None)
     mvp.add_argument("--pipeline-device", default=None)
-    mvp.add_argument("--cloud-skip-run", action="store_true")
-    mvp.add_argument("--cloud-skip-sync", action="store_true")
+    research_partner = subparsers.add_parser(
+        "research_partner",
+        help="研究伙伴主线：固定 bootstrap，会执行轻量 bootstrap 并跳过 mvp/writeup",
+        description="研究伙伴主线：固定 bootstrap，会执行轻量 bootstrap 并跳过 mvp/writeup，用于检索/idea/critique 的合同化入口。",
+    )
+    _add_common_api_args(research_partner)
+    research_partner.add_argument("--experiment", default="paper_writer")
+    research_partner.add_argument("--run-dir", default=None)
+    research_partner.add_argument("--engine", choices=["semanticscholar", "openalex"], default="openalex")
+    research_partner.add_argument("--idea-name", default="paper_writer_research_partner")
+    research_partner.add_argument("--title", default="Evidence-first Research Partner Session")
+    research_partner.add_argument(
+        "--description",
+        default="Bootstrap an evidence-first workspace for search, idea generation, and critique.",
+    )
+    research_partner.add_argument("--literature-top-k", type=int, default=5)
+    research_partner.add_argument(
+        "--rubric-profile",
+        choices=["default", "cvpr", "journal_q2"],
+        default="default",
+    )
+    research_partner.add_argument(
+        "--evidence-file",
+        action="append",
+        default=[],
+    )
 
     return parser
+
+
+def _build_entry_cmd(
+    args: argparse.Namespace,
+) -> Callable[[argparse.Namespace, list[str]], list[str]]:
+    if args.entry == "scientist":
+        return _build_scientist_cmd
+    if args.entry == "mvp":
+        return _build_mvp_cmd
+    if args.entry == "research_partner":
+        return _build_research_cmd
+    raise ValueError(f"Unsupported entry: {args.entry}")
+
+
+def _stream_process_output(proc: Any) -> SimpleNamespace:
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    for line in getattr(proc, "stdout", None) or []:
+        rendered = str(line)
+        stdout_chunks.append(rendered)
+        print(_sanitize_embedded_paths(_sanitize_cli_text(rendered)), end="")
+    for line in getattr(proc, "stderr", None) or []:
+        rendered = str(line)
+        stderr_chunks.append(rendered)
+        print(_sanitize_embedded_paths(_sanitize_cli_text(rendered)), end="", file=sys.stderr)
+    returncode = int(proc.wait())
+    return SimpleNamespace(
+        returncode=returncode,
+        stdout="".join(stdout_chunks),
+        stderr="".join(stderr_chunks),
+    )
 
 
 def main() -> None:
@@ -405,19 +600,39 @@ def main() -> None:
     parser = build_parser()
     args, passthrough = parser.parse_known_args()
     cfg = _collect_effective_config(args)
-    _validate_effective_config(args, cfg)
-    env = _apply_api_env(args, cfg)
 
-    if args.entry == "scientist":
-        cmd = _build_scientist_cmd(args, passthrough)
-    else:
-        cmd = _build_mvp_cmd(args, passthrough)
+    cmd_builder = _build_entry_cmd(args)
+    cmd = cmd_builder(args, passthrough)
 
     _print_effective_configuration(args=args, cfg=cfg, cmd=cmd, passthrough=passthrough)
     if args.dry_run:
         return
 
-    proc = subprocess.run(cmd, cwd=str(ROOT), env=env, check=False)
+    _validate_effective_config(args, cfg)
+    env = _apply_api_env(args, cfg)
+
+    if args.entry == "research_partner":
+        child = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        proc = _stream_process_output(child)
+    else:
+        proc = subprocess.run(cmd, cwd=str(ROOT), env=env, check=False, capture_output=True, text=True)
+        if proc.stdout:
+            print(_sanitize_embedded_paths(_sanitize_cli_text(proc.stdout)), end="")
+        if proc.stderr:
+            print(_sanitize_embedded_paths(_sanitize_cli_text(proc.stderr)), end="", file=sys.stderr)
+    _maybe_materialize_research_partner(
+        entry=args.entry,
+        args=args,
+        completed=proc,
+        materialize_env=_materialization_env(env),
+    )
     raise SystemExit(proc.returncode)
 
 
