@@ -7,6 +7,8 @@ __pycache__/
 results/
 workspace/*
 !workspace/README.md
+LatexTemplet/
+论文写作/
 
 key.sh
 remote.yaml

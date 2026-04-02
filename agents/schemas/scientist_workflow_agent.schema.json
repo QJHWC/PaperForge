@@ -8,6 +8,7 @@
     "code_model": { "type": ["string", "null"] },
     "writeup_model": { "type": ["string", "null"] },
     "review_model": { "type": "string" },
+    "gateway_profile": { "type": ["string", "null"], "enum": ["safe", "full", null] },
     "writeup": { "type": "string", "enum": ["latex"] },
     "skip_idea_generation": { "type": "boolean", "default": false },
     "skip_novelty_check": { "type": "boolean", "default": false },

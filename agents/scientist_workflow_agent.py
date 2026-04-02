@@ -18,11 +18,12 @@ from .runtime import (
 @dataclass
 class ScientistWorkflowConfig:
     experiment: str = "paper_writer"
-    model: str = "claude-sonnet-4-6"
+    model: str = "gpt-5.4-xhigh"
     idea_model: str | None = None
     code_model: str | None = None
     writeup_model: str | None = None
-    review_model: str = "gpt-4o-2024-05-13"
+    review_model: str = "gpt-5.4-xhigh"
+    gateway_profile: str | None = None
     writeup: str = "latex"
     skip_idea_generation: bool = False
     skip_novelty_check: bool = False
@@ -55,11 +56,12 @@ class ScientistWorkflowAgent:
     def build_config(self, **kwargs: Any) -> ScientistWorkflowConfig:
         return ScientistWorkflowConfig(
             experiment=str(kwargs.get("experiment", "paper_writer")),
-            model=str(kwargs.get("model", "claude-sonnet-4-6")),
+            model=str(kwargs.get("model", "gpt-5.4-xhigh")),
             idea_model=kwargs.get("idea_model"),
             code_model=kwargs.get("code_model"),
             writeup_model=kwargs.get("writeup_model"),
-            review_model=str(kwargs.get("review_model", "gpt-4o-2024-05-13")),
+            review_model=str(kwargs.get("review_model", "gpt-5.4-xhigh")),
+            gateway_profile=kwargs.get("gateway_profile"),
             writeup=str(kwargs.get("writeup", "latex")),
             skip_idea_generation=bool(kwargs.get("skip_idea_generation", False)),
             skip_novelty_check=bool(kwargs.get("skip_novelty_check", False)),
@@ -79,6 +81,7 @@ class ScientistWorkflowAgent:
         _append_option(command, "--code-model", cfg.code_model)
         _append_option(command, "--writeup-model", cfg.writeup_model)
         _append_option(command, "--review-model", cfg.review_model)
+        _append_option(command, "--gateway-profile", cfg.gateway_profile)
         _append_option(command, "--writeup", cfg.writeup)
         _append_option(command, "--parallel", cfg.parallel)
         _append_option(command, "--gpus", cfg.gpus)

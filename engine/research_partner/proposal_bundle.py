@@ -340,7 +340,7 @@ def materialize_proposal_bundle(
         CritiqueLoopConfig(
             rubric_profile=load_rubric_profile(rubric_profile),
             review_mode="llm_committee",
-            review_model="claude-sonnet-4-6",
+            review_model="gpt-5.4-xhigh",
             reviewer_count=3,
         ),
     )

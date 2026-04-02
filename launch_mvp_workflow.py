@@ -5,9 +5,10 @@ import os
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 
 ROOT = Path(__file__).resolve().parent
@@ -41,7 +42,7 @@ def _require_virtualenv(script_name: str) -> None:
 if __name__ == "__main__":
     _require_virtualenv("launch_mvp_workflow.py")
 
-from engine.llm import AVAILABLE_LLMS
+from engine.llm import AVAILABLE_LLMS, gateway_profile_env_overrides, resolve_gateway_profile
 from engine.mvp_workflow import (
     append_upload_feedback_to_notes,
     create_workspace_from_template,
@@ -59,9 +60,24 @@ from engine.mvp_workflow import (
     write_idea_metadata,
 )
 from engine.run_lock import run_lock
+from engine.workspace_config import (
+    DEFAULT_WORKSPACE_CONFIG,
+    load_workspace_config,
+    resolve_config_path,
+    save_workspace_config,
+)
 
 
-def _build_aider_model(model_name: str):
+@dataclass
+class WriteupRuntimeConfig:
+    writeup_model: str
+    gateway_profile: str
+    existing_draft: str | None
+    enforce_disclosure: bool
+    skip_chktex_fix: bool
+
+
+def _build_aider_model(model_name: str, gateway_profile: str | None = None):
     from aider.models import Model
 
     def _first_non_empty_env(*keys: str) -> str | None:
@@ -105,16 +121,11 @@ def _build_aider_model(model_name: str):
 
         # Some OpenAI-compatible gateways return empty completions when max_tokens is omitted.
         # Keep an explicit default for stability, with env override support.
-        compat_max = 4096
-        compat_max_raw = os.getenv("PAPERFORGE_OPENAI_COMPAT_MAX_TOKENS", "").strip()
-        if compat_max_raw:
-            try:
-                parsed = int(compat_max_raw)
-                if parsed > 0:
-                    compat_max = parsed
-            except ValueError:
-                pass
-        m.extra_params.setdefault("max_tokens", compat_max)
+        resolved_profile = resolve_gateway_profile(gateway_profile)
+        m.extra_params.setdefault("max_tokens", int(resolved_profile["max_tokens"]))
+        reasoning_effort = str(resolved_profile["reasoning_effort"]).strip()
+        if reasoning_effort:
+            m.extra_params.setdefault("reasoning_effort", reasoning_effort)
         return m
 
     route_claude_via_openai = os.getenv("PAPERFORGE_CLAUDE_OPENAI_COMPAT", "0").strip().lower() in {
@@ -139,6 +150,10 @@ def _build_aider_model(model_name: str):
     if model_name.startswith("gpt-") or model_name.startswith("o1") or model_name.startswith("o3"):
         return _with_openai_headers(Model(f"openai/{model_name}"))
     return Model(model_name)
+
+
+def _aider_stream_enabled(gateway_profile: str | None = None) -> bool:
+    return bool(resolve_gateway_profile(gateway_profile)["stream"])
 
 
 @contextmanager
@@ -173,6 +188,89 @@ def _profile_env(profile: str) -> Dict[str, str]:
     return {}
 
 
+def _deprecated_env_bool(name: str) -> Optional[bool]:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    print(f"[deprecated] {name} is deprecated; use CLI flags or workspace_config.json instead.")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_writeup_runtime_config(
+    args: argparse.Namespace,
+    workspace: Path,
+) -> WriteupRuntimeConfig:
+    config = load_workspace_config(str(workspace))
+    writeup_model = args.writeup_model or str(config.get("writeup_model") or DEFAULT_WORKSPACE_CONFIG["writeup_model"])
+    gateway_profile = args.gateway_profile or str(
+        config.get("gateway_profile") or DEFAULT_WORKSPACE_CONFIG["gateway_profile"]
+    )
+
+    existing_draft = None
+    if getattr(args, "phase", None) == "refine":
+        existing_draft = args.existing_draft
+        if existing_draft is None:
+            cfg_draft = config.get("existing_draft")
+            if isinstance(cfg_draft, str) and cfg_draft.strip():
+                existing_draft = resolve_config_path(str(workspace), cfg_draft.strip())
+
+    use_existing_draft_env = _deprecated_env_bool("WRITEUP_USE_EXISTING_DRAFT")
+    use_existing_draft = existing_draft is not None or bool(use_existing_draft_env)
+
+    enforce_disclosure = args.enforce_disclosure
+    if enforce_disclosure is None:
+        if "enforce_disclosure" in config:
+            enforce_disclosure = bool(config["enforce_disclosure"])
+        else:
+            deprecated = _deprecated_env_bool("WRITEUP_ENFORCE_DISCLOSURE")
+            if deprecated is not None:
+                enforce_disclosure = deprecated
+            else:
+                enforce_disclosure = not use_existing_draft
+
+    skip_chktex_fix = args.skip_chktex_fix
+    if skip_chktex_fix is None:
+        if "skip_chktex_fix" in config:
+            skip_chktex_fix = bool(config["skip_chktex_fix"])
+        else:
+            deprecated = _deprecated_env_bool("WRITEUP_SKIP_CHKTEX_FIX")
+            if deprecated is not None:
+                skip_chktex_fix = deprecated
+            else:
+                skip_chktex_fix = use_existing_draft
+
+    return WriteupRuntimeConfig(
+        writeup_model=writeup_model,
+        gateway_profile=gateway_profile,
+        existing_draft=existing_draft,
+        enforce_disclosure=bool(enforce_disclosure),
+        skip_chktex_fix=bool(skip_chktex_fix),
+    )
+
+
+def _persist_workspace_runtime_config(workspace: Path, runtime: WriteupRuntimeConfig) -> None:
+    current = load_workspace_config(str(workspace))
+    existing_draft = runtime.existing_draft
+    if existing_draft:
+        draft_path = Path(existing_draft).expanduser().resolve()
+        try:
+            existing_draft = draft_path.relative_to(workspace.resolve()).as_posix()
+        except ValueError:
+            existing_draft = str(draft_path)
+    elif current.get("existing_draft"):
+        existing_draft = current.get("existing_draft")
+    save_workspace_config(
+        str(workspace),
+        {
+            "writeup_model": runtime.writeup_model or current.get("writeup_model"),
+            "gateway_profile": runtime.gateway_profile or current.get("gateway_profile"),
+            "existing_draft": existing_draft,
+            "enforce_disclosure": runtime.enforce_disclosure,
+            "skip_chktex_fix": runtime.skip_chktex_fix,
+        },
+    )
+
+
 def _update_state(workspace: Path, **updates) -> None:
     state = load_workflow_state(str(workspace))
     state.update(updates)
@@ -196,7 +294,7 @@ def _copy_phase_pdf(workspace: Path, idea_name: str, output_name: str) -> None:
 
 def _run_writeup_phase(
     workspace: Path,
-    writeup_model: str,
+    runtime: WriteupRuntimeConfig,
     engine: str,
     history_name: str,
     output_pdf_name: str,
@@ -212,6 +310,12 @@ def _run_writeup_phase(
     writeup_file = workspace / "latex" / "template.tex"
     exp_file = workspace / "experiment.py"
     vis_file = workspace / "plot.py"
+    if runtime.existing_draft:
+        draft_source = Path(runtime.existing_draft).expanduser().resolve()
+        if not draft_source.exists():
+            raise SystemExit(f"existing draft not found: {draft_source}")
+        if draft_source != writeup_file.resolve():
+            shutil.copy2(draft_source, writeup_file)
 
     fnames = [str(writeup_file), str(notes)]
     if exp_file.exists():
@@ -224,18 +328,21 @@ def _run_writeup_phase(
         chat_history_file=str(workspace / f"{history_name}_writeup_aider.txt"),
     )
     edit_format = os.getenv("PAPERFORGE_AIDER_EDIT_FORMAT", "udiff").strip() or "udiff"
-    coder = Coder.create(
-        main_model=_build_aider_model(writeup_model),
-        fnames=fnames,
-        io=io,
-        stream=False,
-        use_git=False,
-        edit_format=edit_format,
-        auto_lint=False,
-    )
-    client, client_model = create_client(writeup_model)
-    env_overrides = _profile_env(profile)
+    env_overrides = {
+        **_profile_env(profile),
+        **gateway_profile_env_overrides(runtime.gateway_profile),
+    }
     with _temporary_env(env_overrides):
+        coder = Coder.create(
+            main_model=_build_aider_model(runtime.writeup_model, runtime.gateway_profile),
+            fnames=fnames,
+            io=io,
+            stream=_aider_stream_enabled(runtime.gateway_profile),
+            use_git=False,
+            edit_format=edit_format,
+            auto_lint=False,
+        )
+        client, client_model = create_client(runtime.writeup_model)
         perform_writeup(
             idea=idea,
             folder_name=str(workspace),
@@ -243,6 +350,9 @@ def _run_writeup_phase(
             cite_client=client,
             cite_model=client_model,
             engine=engine,
+            existing_draft_path=runtime.existing_draft,
+            enforce_disclosure=runtime.enforce_disclosure,
+            skip_chktex_fix=runtime.skip_chktex_fix,
         )
     _copy_phase_pdf(workspace, idea_name=idea["Name"], output_name=output_pdf_name)
 
@@ -260,6 +370,7 @@ def _phase_bootstrap(args: argparse.Namespace, workspace: Path | None, *, create
     else:
         workspace = workspace.resolve()
         workspace.mkdir(parents=True, exist_ok=True)
+    _update_state(workspace, phase="bootstrap_running", current_phase="bootstrap", status="running")
 
     write_idea_metadata(
         str(workspace),
@@ -276,6 +387,8 @@ def _phase_bootstrap(args: argparse.Namespace, workspace: Path | None, *, create
         )
     )
     ensure_upload_interface(str(workspace))
+    if not (workspace / "workspace_config.json").exists():
+        save_workspace_config(str(workspace), {})
 
     if args.refresh_literature:
         refresh_notes_with_literature(
@@ -308,9 +421,11 @@ def _phase_bootstrap(args: argparse.Namespace, workspace: Path | None, *, create
     refresh_notes_with_run_feedback(str(workspace), str(notes_path))
 
     if not args.skip_writeup:
+        runtime = _resolve_writeup_runtime_config(args, workspace)
+        _persist_workspace_runtime_config(workspace, runtime)
         _run_writeup_phase(
             workspace=workspace,
-            writeup_model=args.writeup_model,
+            runtime=runtime,
             engine=args.engine,
             history_name="mvp_bootstrap",
             output_pdf_name="paper_mvp_draft.pdf",
@@ -320,6 +435,8 @@ def _phase_bootstrap(args: argparse.Namespace, workspace: Path | None, *, create
     _update_state(
         workspace,
         phase="bootstrap_completed",
+        current_phase="bootstrap",
+        status="completed",
         mvp_completed=mvp_ok,
         upload_interface_ready=True,
     )
@@ -328,6 +445,7 @@ def _phase_bootstrap(args: argparse.Namespace, workspace: Path | None, *, create
 
 
 def _phase_feedback(args: argparse.Namespace, workspace: Path) -> None:
+    _update_state(workspace, phase="feedback_running", current_phase="feedback", status="running")
     ensure_upload_interface(str(workspace))
     manifest = ingest_user_uploads(str(workspace))
     notes_path = workspace / "notes.txt"
@@ -344,9 +462,11 @@ def _phase_feedback(args: argparse.Namespace, workspace: Path) -> None:
         )
 
     if not args.skip_writeup:
+        runtime = _resolve_writeup_runtime_config(args, workspace)
+        _persist_workspace_runtime_config(workspace, runtime)
         _run_writeup_phase(
             workspace=workspace,
-            writeup_model=args.writeup_model,
+            runtime=runtime,
             engine=args.engine,
             history_name="mvp_feedback",
             output_pdf_name="paper_with_feedback.pdf",
@@ -356,6 +476,8 @@ def _phase_feedback(args: argparse.Namespace, workspace: Path) -> None:
     _update_state(
         workspace,
         phase="feedback_completed",
+        current_phase="feedback",
+        status="completed",
         ingested_uploads=True,
         upload_manifest=str(workspace / "artifacts" / "upload_manifest.json"),
     )
@@ -363,6 +485,7 @@ def _phase_feedback(args: argparse.Namespace, workspace: Path) -> None:
 
 
 def _phase_optimize(args: argparse.Namespace, workspace: Path) -> None:
+    _update_state(workspace, phase="optimize_running", current_phase="optimize", status="running")
     for _ in range(max(0, int(args.optimize_runs))):
         run_idx = next_run_index(str(workspace))
         run_info = run_experiment_once(
@@ -389,35 +512,41 @@ def _phase_optimize(args: argparse.Namespace, workspace: Path) -> None:
     refresh_notes_with_run_feedback(str(workspace), str(notes_path))
 
     if not args.skip_writeup:
+        runtime = _resolve_writeup_runtime_config(args, workspace)
+        _persist_workspace_runtime_config(workspace, runtime)
         _run_writeup_phase(
             workspace=workspace,
-            writeup_model=args.writeup_model,
+            runtime=runtime,
             engine=args.engine,
             history_name="mvp_optimize",
             output_pdf_name="paper_after_optimize.pdf",
             profile="balanced",
         )
 
-    _update_state(workspace, phase="optimize_completed")
+    _update_state(workspace, phase="optimize_completed", current_phase="optimize", status="completed")
     print(f"[optimize] workspace={workspace}")
 
 
 def _phase_refine(args: argparse.Namespace, workspace: Path) -> None:
+    _update_state(workspace, phase="refine_running", current_phase="refine", status="running")
     if not args.skip_writeup:
+        runtime = _resolve_writeup_runtime_config(args, workspace)
+        _persist_workspace_runtime_config(workspace, runtime)
         _run_writeup_phase(
             workspace=workspace,
-            writeup_model=args.writeup_model,
+            runtime=runtime,
             engine=args.engine,
             history_name="mvp_refine",
             output_pdf_name="paper_refined.pdf",
             profile=args.refine_profile,
         )
 
-    _update_state(workspace, phase="refine_completed")
+    _update_state(workspace, phase="refine_completed", current_phase="refine", status="completed")
     print(f"[refine] workspace={workspace}")
 
 
 def _phase_cloud(args: argparse.Namespace, workspace: Path) -> None:
+    _update_state(workspace, phase="cloud_running", current_phase="cloud", status="running")
     cmd = [
         args.python_bin,
         str(ROOT / "run_cloud_pipeline_cycle.py"),
@@ -448,6 +577,7 @@ def _phase_cloud(args: argparse.Namespace, workspace: Path) -> None:
     proc = subprocess.run(cmd, cwd=str(ROOT), check=False)
     if proc.returncode != 0:
         raise SystemExit(proc.returncode)
+    _update_state(workspace, phase="cloud_completed", current_phase="cloud", status="completed")
 
 
 def _default_pipeline_root() -> str:
@@ -491,9 +621,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--writeup-model",
-        default="claude-sonnet-4-6",
+        default=None,
         choices=AVAILABLE_LLMS,
     )
+    p.add_argument("--gateway-profile", choices=["safe", "full"], default=None)
+    p.add_argument("--existing-draft", default=None, help="Path to an existing .tex manuscript used as the refine draft.")
+    p.add_argument(
+        "--enforce-disclosure",
+        dest="enforce_disclosure",
+        action="store_true",
+        help="Ensure disclosure section is present in the generated manuscript.",
+    )
+    p.add_argument(
+        "--no-enforce-disclosure",
+        dest="enforce_disclosure",
+        action="store_false",
+        help="Do not inject disclosure section into the manuscript.",
+    )
+    p.add_argument(
+        "--skip-chktex-fix",
+        dest="skip_chktex_fix",
+        action="store_true",
+        help="Skip chktex-driven auto-fix rounds and only emit reports/compile outputs.",
+    )
+    p.add_argument(
+        "--no-skip-chktex-fix",
+        dest="skip_chktex_fix",
+        action="store_false",
+        help="Allow chktex-driven auto-fix rounds.",
+    )
+    p.set_defaults(enforce_disclosure=None, skip_chktex_fix=None)
     p.add_argument("--python-bin", default=sys.executable)
     p.add_argument("--skip-writeup", action="store_true")
     p.add_argument("--skip-mvp-run", action="store_true")
@@ -555,6 +712,8 @@ def _experiment_root_write_lock(experiment: str):
 
 def main() -> None:
     args = build_parser().parse_args()
+    if args.existing_draft and args.phase != "refine":
+        raise SystemExit("--existing-draft is only supported with --phase refine")
     if (
         not args.skip_writeup
         and args.phase in {"bootstrap", "feedback", "optimize", "refine", "all"}

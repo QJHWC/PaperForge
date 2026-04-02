@@ -64,6 +64,10 @@ class TestPathTraversalWorkspace(unittest.TestCase):
         data = json.loads(body)
         self.assertIn("error", data)
 
+    def test_history_path_traversal_blocked(self):
+        status, _ = self._get("/api/workspace/../../etc/history")
+        self.assertEqual(status, 403)
+
 
 class TestPathTraversalStaticFiles(unittest.TestCase):
     """验证静态文件处理器路径穿越防护。"""
@@ -89,6 +93,10 @@ class TestPathTraversalStaticFiles(unittest.TestCase):
         # 路径解析后超出 FRONTEND_DIR，应被拦截（返回 404）
         status, _ = self._get("/../engine/perform_writeup.py")
         self.assertNotEqual(status, 200)
+
+    def test_results_file_path_traversal_blocked(self):
+        status, _ = self._get("/files/results/../../etc/passwd")
+        self.assertIn(status, (403, 404))
 
 
 class TestCORSHeader(unittest.TestCase):

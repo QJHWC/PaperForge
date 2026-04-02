@@ -6,6 +6,8 @@ import os.path as osp
 import shutil
 import sys
 import time
+from contextlib import contextmanager
+from pathlib import Path
 
 
 def _in_virtualenv() -> bool:
@@ -44,7 +46,12 @@ from aider.models import Model
 from datetime import datetime
 
 from engine.generate_ideas import generate_ideas, check_idea_novelty
-from engine.llm import create_client, AVAILABLE_LLMS
+from engine.llm import (
+    AVAILABLE_LLMS,
+    create_client,
+    gateway_profile_env_overrides,
+    resolve_gateway_profile,
+)
 from engine.mvp_workflow import validate_template_integrity
 from engine.perform_experiments import perform_experiments
 from engine.perform_review import perform_review, load_paper, perform_improvement
@@ -64,6 +71,10 @@ def _results_root_write_lock(experiment: str):
 
 def print_time():
     print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+
+def _aider_stream_enabled(gateway_profile: str | None = None) -> bool:
+    return bool(resolve_gateway_profile(gateway_profile)["stream"])
 
 
 def parse_arguments():
@@ -88,7 +99,7 @@ def parse_arguments():
     parser.add_argument(
         "--model",
         type=str,
-        default="claude-sonnet-4-6",
+        default="gpt-5.4-xhigh",
         choices=AVAILABLE_LLMS,
         help="Default model used when stage-specific model flags are not set.",
     )
@@ -116,9 +127,16 @@ def parse_arguments():
     parser.add_argument(
         "--review-model",
         type=str,
-        default="gpt-4o-2024-05-13",
+        default="gpt-5.4-xhigh",
         choices=AVAILABLE_LLMS,
         help="Model used for paper review and improvement review.",
+    )
+    parser.add_argument(
+        "--gateway-profile",
+        type=str,
+        default=None,
+        choices=["safe", "full"],
+        help="Gateway profile controlling stream/max_tokens/reasoning defaults.",
     )
     parser.add_argument(
         "--writeup",
@@ -197,15 +215,49 @@ def check_latex_dependencies():
     return True
 
 
-def build_aider_model(model_name: str) -> Model:
+def build_aider_model(model_name: str, gateway_profile: str | None = None) -> Model:
+    def _first_non_empty_env(*keys: str) -> str | None:
+        for key in keys:
+            value = os.getenv(key)
+            if value and value.strip():
+                return value.strip()
+        return None
+
+    def _with_openai_headers(m: Model) -> Model:
+        if not getattr(m, "extra_params", None):
+            m.extra_params = {}
+        extra_headers = dict(m.extra_params.get("extra_headers", {}))
+        extra_headers.setdefault("User-Agent", os.getenv("OPENAI_USER_AGENT", "curl/8.7.1"))
+        m.extra_params["extra_headers"] = extra_headers
+
+        api_key = ***redacted***"OPENAI_WRITEUP_API_KEY", "OPENAI_API_KEY")
+        if api_key:
+            ***redacted***"api_key"] = api_key
+
+        api_base = _first_non_empty_env("OPENAI_WRITEUP_BASE_URL", "OPENAI_BASE_URL", "OPENAI_API_BASE")
+        if api_base:
+            api_base = api_base.strip().rstrip("/")
+            if not api_base.endswith("/v1"):
+                api_base = f"{api_base}/v1"
+            m.extra_params["api_base"] = api_base
+
+        resolved = resolve_gateway_profile(gateway_profile)
+        m.extra_params.setdefault("max_tokens", int(resolved["max_tokens"]))
+        reasoning_effort = str(resolved["reasoning_effort"]).strip()
+        if reasoning_effort:
+            m.extra_params.setdefault("reasoning_effort", reasoning_effort)
+        return m
+
     if model_name == "gpt-5.3-codex xhigh":
-        return Model("gpt-5.3-codex-xhigh")
+        return _with_openai_headers(Model("openai/gpt-5.3-codex-xhigh"))
     if model_name == "deepseek-coder-v2-0724":
         return Model("deepseek/deepseek-coder")
     if model_name == "deepseek-reasoner":
         return Model("deepseek/deepseek-reasoner")
     if model_name == "llama3.1-405b":
         return Model("openrouter/meta-llama/llama-3.1-405b-instruct")
+    if model_name.startswith("gpt-") or model_name.startswith("o1") or model_name.startswith("o3"):
+        return _with_openai_headers(Model(f"openai/{model_name}"))
     return Model(model_name)
 
 
@@ -226,7 +278,14 @@ def _scientist_required_template_files(writeup_format: str) -> list[str]:
         "run_0/final_info.json",
     ]
     if writeup_format == "latex":
-        required.append("latex/template.tex")
+        required.extend(
+            [
+                "latex/template.tex",
+                "latex/ieeecolor.cls",
+                "latex/generic.sty",
+                "latex/TII.eps",
+            ]
+        )
     return required
 
 
@@ -359,7 +418,7 @@ def do_idea(
                 main_model=main_model,
                 fnames=fnames,
                 io=io,
-                stream=False,
+                stream=_aider_stream_enabled(),
                 use_git=False,
                 edit_format="diff",
             )
@@ -400,7 +459,7 @@ def do_idea(
                         main_model=main_model,
                         fnames=fnames,
                         io=writeup_io,
-                        stream=False,
+                        stream=_aider_stream_enabled(),
                         use_git=False,
                         edit_format="diff",
                     )
@@ -483,6 +542,8 @@ def do_idea(
 
 if __name__ == "__main__":
     args = parse_arguments()
+    for key, value in gateway_profile_env_overrides(args.gateway_profile).items():
+        os.environ[key] = value
 
     try:
         base_dir = validate_template_integrity(

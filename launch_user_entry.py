@@ -227,6 +227,8 @@ def _apply_api_env(args: argparse.Namespace, cfg: Dict[str, Dict[str, Optional[s
         env["ANTHROPIC_API_KEY"] = str(cfg["anthropic_api_key"]["value"])
     if cfg["anthropic_base_url"]["value"]:
         env["ANTHROPIC_BASE_URL"] = str(cfg["anthropic_base_url"]["value"])
+    if getattr(args, "gateway_profile", None):
+        env["PAPERFORGE_GATEWAY_PROFILE"] = str(args.gateway_profile)
 
     return env
 
@@ -353,6 +355,7 @@ def _build_scientist_cmd(args: argparse.Namespace, passthrough: list[str]) -> li
     _append_opt(cmd, "--code-model", args.code_model)
     _append_opt(cmd, "--writeup-model", args.writeup_model)
     _append_opt(cmd, "--review-model", args.review_model)
+    _append_opt(cmd, "--gateway-profile", getattr(args, "gateway_profile", None))
 
     _append_flag(cmd, "--skip-idea-generation", args.skip_idea_generation)
     _append_flag(cmd, "--skip-novelty-check", args.skip_novelty_check)
@@ -369,11 +372,21 @@ def _build_mvp_cmd(args: argparse.Namespace, passthrough: list[str]) -> list[str
     _append_opt(cmd, "--run-dir", args.run_dir)
     _append_opt(cmd, "--engine", args.engine)
     _append_opt(cmd, "--writeup-model", args.writeup_model)
+    _append_opt(cmd, "--gateway-profile", getattr(args, "gateway_profile", None))
+    _append_opt(cmd, "--existing-draft", getattr(args, "existing_draft", None))
     _append_opt(cmd, "--optimize-runs", args.optimize_runs)
     _append_opt(cmd, "--refine-profile", args.refine_profile)
     _append_opt(cmd, "--idea-name", args.idea_name)
     _append_opt(cmd, "--title", args.title)
     _append_opt(cmd, "--description", args.description)
+    if getattr(args, "enforce_disclosure", None) is True:
+        cmd.append("--enforce-disclosure")
+    if getattr(args, "enforce_disclosure", None) is False:
+        cmd.append("--no-enforce-disclosure")
+    if getattr(args, "skip_chktex_fix", None) is True:
+        cmd.append("--skip-chktex-fix")
+    if getattr(args, "skip_chktex_fix", None) is False:
+        cmd.append("--no-skip-chktex-fix")
 
     _append_flag(cmd, "--skip-writeup", args.skip_writeup)
     _append_flag(cmd, "--skip-mvp-run", args.skip_mvp_run)
@@ -391,6 +404,39 @@ def _build_mvp_cmd(args: argparse.Namespace, passthrough: list[str]) -> list[str
     _append_opt(cmd, "--pipeline-device", args.pipeline_device)
 
     cmd.extend(passthrough)
+    return cmd
+
+
+def _build_writeup_cmd(args: argparse.Namespace, passthrough: list[str]) -> list[str]:
+    if passthrough:
+        extras = " ".join(passthrough)
+        raise SystemExit(f"writeup 不支持额外参数: {extras}")
+
+    if args.workflow_kind == "scientist":
+        cmd = [sys.executable, str(ROOT / "engine" / "perform_writeup.py")]
+        _append_opt(cmd, "--folder", args.folder or args.workspace)
+        _append_opt(cmd, "--model", args.writeup_model)
+        _append_opt(cmd, "--engine", args.engine)
+        if args.no_writing:
+            cmd.append("--no-writing")
+        return cmd
+
+    cmd = [sys.executable, str(ROOT / "launch_mvp_workflow.py")]
+    cmd.extend(["--phase", "refine"])
+    _append_opt(cmd, "--run-dir", args.workspace or args.folder)
+    _append_opt(cmd, "--writeup-model", args.writeup_model)
+    _append_opt(cmd, "--engine", args.engine)
+    _append_opt(cmd, "--refine-profile", args.refine_profile)
+    _append_opt(cmd, "--gateway-profile", getattr(args, "gateway_profile", None))
+    _append_opt(cmd, "--existing-draft", getattr(args, "existing_draft", None))
+    if getattr(args, "enforce_disclosure", None) is True:
+        cmd.append("--enforce-disclosure")
+    if getattr(args, "enforce_disclosure", None) is False:
+        cmd.append("--no-enforce-disclosure")
+    if getattr(args, "skip_chktex_fix", None) is True:
+        cmd.append("--skip-chktex-fix")
+    if getattr(args, "skip_chktex_fix", None) is False:
+        cmd.append("--no-skip-chktex-fix")
     return cmd
 
 
@@ -494,11 +540,12 @@ def build_parser() -> argparse.ArgumentParser:
     scientist.add_argument("--parallel", type=int, default=0)
     scientist.add_argument("--gpus", default=None)
     scientist.add_argument("--writeup", choices=["latex"], default="latex")
-    scientist.add_argument("--model", default="claude-sonnet-4-6")
+    scientist.add_argument("--model", default="gpt-5.4-xhigh")
     scientist.add_argument("--idea-model", default=None)
     scientist.add_argument("--code-model", default=None)
     scientist.add_argument("--writeup-model", default=None)
-    scientist.add_argument("--review-model", default="gpt-4o-2024-05-13")
+    scientist.add_argument("--review-model", default="gpt-5.4-xhigh")
+    scientist.add_argument("--gateway-profile", choices=["safe", "full"], default=None)
     scientist.add_argument("--skip-idea-generation", action="store_true")
     scientist.add_argument("--skip-novelty-check", action="store_true")
     scientist.add_argument("--improvement", action="store_true")
@@ -512,7 +559,9 @@ def build_parser() -> argparse.ArgumentParser:
     mvp.add_argument("--experiment", default="paper_writer")
     mvp.add_argument("--run-dir", default=None)
     mvp.add_argument("--engine", choices=["semanticscholar", "openalex"], default="openalex")
-    mvp.add_argument("--writeup-model", default="claude-sonnet-4-6")
+    mvp.add_argument("--writeup-model", default=None)
+    mvp.add_argument("--gateway-profile", choices=["safe", "full"], default=None)
+    mvp.add_argument("--existing-draft", default=None)
     mvp.add_argument("--optimize-runs", type=int, default=2)
     mvp.add_argument("--refine-profile", choices=["fast", "balanced", "deep"], default="balanced")
     mvp.add_argument("--idea-name", default="paper_writer_user_entry")
@@ -523,6 +572,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mvp.add_argument("--skip-writeup", action="store_true")
     mvp.add_argument("--skip-mvp-run", action="store_true")
+    mvp.add_argument("--enforce-disclosure", dest="enforce_disclosure", action="store_true")
+    mvp.add_argument("--no-enforce-disclosure", dest="enforce_disclosure", action="store_false")
+    mvp.add_argument("--skip-chktex-fix", dest="skip_chktex_fix", action="store_true")
+    mvp.add_argument("--no-skip-chktex-fix", dest="skip_chktex_fix", action="store_false")
+    mvp.set_defaults(enforce_disclosure=None, skip_chktex_fix=None)
     mvp.add_argument("--refresh-literature", action="store_true")
     mvp.add_argument("--run-cloud-cycle", action="store_true")
     mvp.add_argument("--cloud-skip-run", action="store_true")
@@ -561,6 +615,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
     )
 
+    writeup = subparsers.add_parser(
+        "writeup",
+        help="独立写作入口：对现有 workspace 或 scientist folder 触发写作/编译。",
+    )
+    _add_common_api_args(writeup)
+    writeup.add_argument("--workflow-kind", choices=["mvp", "scientist"], default="mvp")
+    writeup.add_argument("--workspace", default=None)
+    writeup.add_argument("--folder", default=None)
+    writeup.add_argument("--writeup-model", default="gpt-5.4-xhigh")
+    writeup.add_argument("--engine", choices=["semanticscholar", "openalex"], default="openalex")
+    writeup.add_argument("--refine-profile", choices=["fast", "balanced", "deep"], default="balanced")
+    writeup.add_argument("--gateway-profile", choices=["safe", "full"], default=None)
+    writeup.add_argument("--existing-draft", default=None)
+    writeup.add_argument("--enforce-disclosure", dest="enforce_disclosure", action="store_true")
+    writeup.add_argument("--no-enforce-disclosure", dest="enforce_disclosure", action="store_false")
+    writeup.add_argument("--skip-chktex-fix", dest="skip_chktex_fix", action="store_true")
+    writeup.add_argument("--no-skip-chktex-fix", dest="skip_chktex_fix", action="store_false")
+    writeup.add_argument("--no-writing", action="store_true")
+    writeup.set_defaults(enforce_disclosure=None, skip_chktex_fix=None)
+
     return parser
 
 
@@ -571,6 +645,8 @@ def _build_entry_cmd(
         return _build_scientist_cmd
     if args.entry == "mvp":
         return _build_mvp_cmd
+    if args.entry == "writeup":
+        return _build_writeup_cmd
     if args.entry == "research_partner":
         return _build_research_cmd
     raise ValueError(f"Unsupported entry: {args.entry}")

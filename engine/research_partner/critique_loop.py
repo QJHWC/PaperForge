@@ -16,7 +16,7 @@ class CritiqueLoopConfig:
     rubric_profile: RubricProfile | None = None
     rubric_name: str = "default"
     review_mode: str = "deterministic"
-    review_model: str = "claude-sonnet-4-6"
+    review_model: str = "gpt-5.4-xhigh"
     reviewer_count: int = 1
 
 

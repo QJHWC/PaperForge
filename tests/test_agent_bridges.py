@@ -8,7 +8,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from agents.coordinator import PaperForgeCoordinator
 from agents.mvp_workflow_agent import MvpWorkflowAgent
@@ -19,10 +19,55 @@ from launch_user_entry import (
     _build_entry_cmd,
     _build_mvp_cmd,
     _build_research_cmd,
+    _build_writeup_cmd,
     _maybe_materialize_research_partner,
     build_parser,
     main,
 )
+
+
+def _completed_process(stdout: str = "", stderr: str = "", returncode: int = 0) -> SimpleNamespace:
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+def _research_partner_args(**overrides: object) -> SimpleNamespace:
+    defaults = {
+        "title": "Evidence-first topic",
+        "description": "desc",
+        "rubric_profile": "cvpr",
+        "evidence_file": [],
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+def _mock_coordinator_run(workspace: str, **overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "agent": "MvpWorkflowAgent",
+        "entrypoint": "launch_mvp_workflow.py",
+        "status": "completed",
+        "input_schema": {"type": "object"},
+        "input": {},
+        "command": ["python", "launch_mvp_workflow.py"],
+        "workspace": workspace,
+        "trace": [],
+        "artifacts": [],
+        "stdout": "",
+        "stderr": "",
+        "returncode": 0,
+    }
+    payload.update(overrides)
+    return payload
+
+
+class _StreamingProcess:
+    def __init__(self, stdout_lines: list[str], stderr_lines: list[str], returncode: int = 0) -> None:
+        self.stdout = iter(stdout_lines)
+        self.stderr = iter(stderr_lines)
+        self.returncode = returncode
+
+    def wait(self) -> int:
+        return self.returncode
 
 
 class AgentBridgeTest(unittest.TestCase):
@@ -45,6 +90,42 @@ class AgentBridgeTest(unittest.TestCase):
         self.assertEqual(result["status"], "planned")
         self.assertIn("phase_skill_map", result["input"])
         self.assertIn("init", result["input"]["phase_skill_map"])
+
+    def test_mvp_agent_propagates_existing_draft_and_gateway_profile(self) -> None:
+        result = MvpWorkflowAgent().run(
+            phase="refine",
+            run_dir="results/paper_writer/demo",
+            gateway_profile="safe",
+            existing_draft="/tmp/manuscript.tex",
+            enforce_disclosure=False,
+            skip_chktex_fix=True,
+            execute=False,
+        )
+        command = result["command"]
+        self.assertIn("--gateway-profile", command)
+        self.assertIn("safe", command)
+        self.assertIn("--existing-draft", command)
+        self.assertIn("/tmp/manuscript.tex", command)
+        self.assertIn("--no-enforce-disclosure", command)
+        self.assertIn("--skip-chktex-fix", command)
+
+    def test_writeup_agent_propagates_existing_draft_and_gateway_profile(self) -> None:
+        result = WriteupAgent().run(
+            workflow_kind="mvp",
+            workspace="results/paper_writer/demo",
+            gateway_profile="full",
+            existing_draft="/tmp/manuscript.tex",
+            enforce_disclosure=True,
+            skip_chktex_fix=False,
+            execute=False,
+        )
+        command = result["command"]
+        self.assertIn("--gateway-profile", command)
+        self.assertIn("full", command)
+        self.assertIn("--existing-draft", command)
+        self.assertIn("/tmp/manuscript.tex", command)
+        self.assertIn("--enforce-disclosure", command)
+        self.assertIn("--no-skip-chktex-fix", command)
 
     def test_coordinator_routes_status_snapshot(self) -> None:
         payload = PaperForgeCoordinator().route_frontend_action("status_snapshot")
@@ -503,6 +584,10 @@ class AgentBridgeTest(unittest.TestCase):
         args = SimpleNamespace(entry="research_partner")
         self.assertIs(_build_entry_cmd(args), _build_research_cmd)
 
+    def test_build_entry_cmd_routes_writeup_explicitly(self) -> None:
+        args = SimpleNamespace(entry="writeup")
+        self.assertIs(_build_entry_cmd(args), _build_writeup_cmd)
+
     def test_build_entry_cmd_rejects_unknown_entry(self) -> None:
         args = SimpleNamespace(entry="unknown")
         with self.assertRaises(ValueError):
@@ -536,6 +621,34 @@ class AgentBridgeTest(unittest.TestCase):
         self.assertIn("/tmp/paper.pdf", command)
         self.assertIn("/tmp/results.csv", command)
 
+    def test_user_entry_builds_writeup_command_with_runtime_flags(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args([
+            "writeup",
+            "--workflow-kind",
+            "mvp",
+            "--workspace",
+            "results/paper_writer/demo",
+            "--writeup-model",
+            "gpt-5.4-xhigh",
+            "--gateway-profile",
+            "safe",
+            "--existing-draft",
+            "/tmp/manuscript.tex",
+            "--no-enforce-disclosure",
+            "--skip-chktex-fix",
+        ])
+        command = _build_writeup_cmd(args, [])
+        self.assertIn("launch_mvp_workflow.py", " ".join(command))
+        self.assertIn("--phase", command)
+        self.assertIn("refine", command)
+        self.assertIn("--gateway-profile", command)
+        self.assertIn("safe", command)
+        self.assertIn("--existing-draft", command)
+        self.assertIn("/tmp/manuscript.tex", command)
+        self.assertIn("--no-enforce-disclosure", command)
+        self.assertIn("--skip-chktex-fix", command)
+
     def test_research_partner_subparser_accepts_rubric_profile_choices(self) -> None:
         parser = build_parser()
         args = parser.parse_args([
@@ -565,7 +678,7 @@ class AgentBridgeTest(unittest.TestCase):
             "--experiment",
             "paper_writer",
             "--writeup-model",
-            "claude-sonnet-4-6",
+            "gpt-5.4-xhigh",
         ])
         with self.assertRaises(SystemExit) as ctx:
             _build_research_cmd(args, passthrough)
@@ -589,20 +702,13 @@ class AgentBridgeTest(unittest.TestCase):
         self.assertIn("会执行轻量 bootstrap", help_text)
 
     def test_user_entry_materializes_research_partner_after_bootstrap(self) -> None:
-        completed = SimpleNamespace(
-            returncode=0,
+        completed = _completed_process(
             stdout="[bootstrap] workspace=/tmp/demo\n[done] workspace=/tmp/demo\n",
-            stderr="",
         )
-        with unittest.mock.patch("launch_user_entry.materialize_proposal_bundle") as materialize_mock:
+        with patch("launch_user_entry.materialize_proposal_bundle") as materialize_mock:
             _maybe_materialize_research_partner(
                 entry="research_partner",
-                args=SimpleNamespace(
-                    title="Evidence-first topic",
-                    description="desc",
-                    rubric_profile="cvpr",
-                    evidence_file=["/tmp/paper.pdf", "/tmp/results.csv"],
-                ),
+                args=_research_partner_args(evidence_file=["/tmp/paper.pdf", "/tmp/results.csv"]),
                 completed=completed,
             )
         materialize_mock.assert_called_once()
@@ -640,18 +746,6 @@ class AgentBridgeTest(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
 
-        class StreamingProcess:
-            def __init__(self) -> None:
-                self.stdout = iter([
-                    "[done] workspace=/tmp/demo\n",
-                    "artifact=/tmp/demo/artifacts/research_partner\n",
-                ])
-                self.stderr = iter(["warn path=/tmp/demo/logs/run.log\n"])
-                self.returncode = 0
-
-            def wait(self) -> int:
-                return self.returncode
-
         with unittest.mock.patch.object(
             sys,
             "argv",
@@ -660,6 +754,10 @@ class AgentBridgeTest(unittest.TestCase):
                 "research_partner",
                 "--experiment",
                 "paper_writer",
+                "--claude-protocol",
+                "openai",
+                "--openai-api-key",
+                "test-key",
                 "--rubric-profile",
                 "journal_q2",
                 "--evidence-file",
@@ -669,10 +767,16 @@ class AgentBridgeTest(unittest.TestCase):
             ],
         ), unittest.mock.patch("launch_user_entry._require_virtualenv"), unittest.mock.patch(
             "launch_user_entry.subprocess.Popen",
-            return_value=StreamingProcess(),
+            return_value=_StreamingProcess(
+                [
+                    "[done] workspace=/tmp/demo\n",
+                    "artifact=/tmp/demo/artifacts/research_partner\n",
+                ],
+                ["warn path=/tmp/demo/logs/run.log\n"],
+            ),
         ) as popen_mock, unittest.mock.patch(
             "launch_user_entry.subprocess.run"
-        ) as run_mock, unittest.mock.patch(
+        ) as run_mock, patch(
             "launch_user_entry.materialize_proposal_bundle"
         ) as materialize_mock:
             with self.assertRaises(SystemExit) as exit_ctx:
@@ -697,38 +801,24 @@ class AgentBridgeTest(unittest.TestCase):
         self.assertEqual(materialize_mock.call_args.kwargs["evidence_files"], ["/tmp/paper.pdf", "/tmp/results.csv"])
 
     def test_user_entry_materialize_research_partner_rejects_outside_workspace_evidence(self) -> None:
-        completed = SimpleNamespace(
-            returncode=0,
+        completed = _completed_process(
             stdout="[bootstrap] workspace=/tmp/demo\n[done] workspace=/tmp/demo\n",
-            stderr="",
         )
         with self.assertRaises(SystemExit) as ctx:
             _maybe_materialize_research_partner(
                 entry="research_partner",
-                args=SimpleNamespace(
-                    title="Evidence-first topic",
-                    description="desc",
-                    rubric_profile="cvpr",
-                    evidence_file=["/etc/passwd"],
-                ),
+                args=_research_partner_args(evidence_file=["/etc/passwd"]),
                 completed=completed,
             )
         self.assertIn("workspace", str(ctx.exception))
 
     def test_user_entry_materializes_from_run_dir_when_done_line_missing(self) -> None:
-        completed = SimpleNamespace(
-            returncode=0,
-            stdout="[bootstrap] no explicit done marker\n",
-            stderr="",
-        )
-        with unittest.mock.patch("launch_user_entry.materialize_proposal_bundle") as materialize_mock:
+        completed = _completed_process(stdout="[bootstrap] no explicit done marker\n")
+        with patch("launch_user_entry.materialize_proposal_bundle") as materialize_mock:
             _maybe_materialize_research_partner(
                 entry="research_partner",
-                args=SimpleNamespace(
+                args=_research_partner_args(
                     run_dir="results/paper_writer/demo",
-                    title="Evidence-first topic",
-                    description="desc",
-                    rubric_profile="cvpr",
                     evidence_file=["/tmp/paper.pdf"],
                 ),
                 completed=completed,
@@ -740,21 +830,11 @@ class AgentBridgeTest(unittest.TestCase):
         )
 
     def test_user_entry_materialization_prefers_explicit_run_dir_over_done_line(self) -> None:
-        completed = SimpleNamespace(
-            returncode=0,
-            stdout="[done] workspace=/tmp/demo\n",
-            stderr="",
-        )
-        with unittest.mock.patch("launch_user_entry.materialize_proposal_bundle") as materialize_mock:
+        completed = _completed_process(stdout="[done] workspace=/tmp/demo\n")
+        with patch("launch_user_entry.materialize_proposal_bundle") as materialize_mock:
             _maybe_materialize_research_partner(
                 entry="research_partner",
-                args=SimpleNamespace(
-                    run_dir="results/paper_writer/demo",
-                    title="Evidence-first topic",
-                    description="desc",
-                    rubric_profile="cvpr",
-                    evidence_file=[],
-                ),
+                args=_research_partner_args(run_dir="results/paper_writer/demo"),
                 completed=completed,
             )
         materialize_mock.assert_called_once()
@@ -767,18 +847,6 @@ class AgentBridgeTest(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
 
-        class StreamingProcess:
-            def __init__(self) -> None:
-                self.stdout = iter([
-                    "[bootstrap] workspace=/tmp/demo/workspace\\n",
-                    "[done] workspace=/tmp/demo/workspace\\n",
-                ])
-                self.stderr = iter(["warn path=/tmp/demo/workspace/logs/run.log\\n"])
-                self.returncode = 0
-
-            def wait(self) -> int:
-                return self.returncode
-
         with unittest.mock.patch.object(
             sys,
             "argv",
@@ -787,13 +855,23 @@ class AgentBridgeTest(unittest.TestCase):
                 "research_partner",
                 "--experiment",
                 "paper_writer",
+                "--claude-protocol",
+                "openai",
+                "--openai-api-key",
+                "test-key",
                 "--rubric-profile",
                 "journal_q2",
             ],
         ), unittest.mock.patch("launch_user_entry._require_virtualenv"), unittest.mock.patch(
             "launch_user_entry.subprocess.Popen",
-            return_value=StreamingProcess(),
-        ), unittest.mock.patch(
+            return_value=_StreamingProcess(
+                [
+                    "[bootstrap] workspace=/tmp/demo/workspace\\n",
+                    "[done] workspace=/tmp/demo/workspace\\n",
+                ],
+                ["warn path=/tmp/demo/workspace/logs/run.log\\n"],
+            ),
+        ), patch(
             "launch_user_entry.materialize_proposal_bundle"
         ) as materialize_mock:
             with self.assertRaises(SystemExit) as exit_ctx:
@@ -811,7 +889,7 @@ class AgentBridgeTest(unittest.TestCase):
 
     def test_user_entry_uses_subprocess_run_for_non_research_partner_entries(self) -> None:
         stdout = io.StringIO()
-        completed = SimpleNamespace(returncode=0, stdout="done\n", stderr="")
+        completed = _completed_process(stdout="done\n")
         with unittest.mock.patch.object(
             sys,
             "argv",
@@ -874,23 +952,10 @@ class AgentBridgeTest(unittest.TestCase):
     def test_research_partner_execute_passes_rubric_profile_to_materializer(self) -> None:
         coordinator = PaperForgeCoordinator()
         coordinator.mvp.run = Mock(
-            return_value={
-                "agent": "MvpWorkflowAgent",
-                "entrypoint": "launch_mvp_workflow.py",
-                "status": "completed",
-                "input_schema": {"type": "object"},
-                "input": {},
-                "command": ["python", "launch_mvp_workflow.py"],
-                "workspace": str(Path("results/paper_writer/demo").resolve()),
-                "trace": [],
-                "artifacts": [],
-                "stdout": "",
-                "stderr": "",
-                "returncode": 0,
-            }
+            return_value=_mock_coordinator_run(str(Path("results/paper_writer/demo").resolve()))
         )
 
-        with unittest.mock.patch("agents.coordinator.materialize_proposal_bundle") as materialize_mock:
+        with patch("agents.coordinator.materialize_proposal_bundle") as materialize_mock:
             coordinator.run(
                 "research_partner",
                 experiment="paper_writer",
@@ -991,20 +1056,11 @@ class AgentBridgeTest(unittest.TestCase):
     def test_research_partner_execute_redacts_stdout_stderr_paths(self) -> None:
         coordinator = PaperForgeCoordinator()
         coordinator.mvp.run = Mock(
-            return_value={
-                "agent": "MvpWorkflowAgent",
-                "entrypoint": "launch_mvp_workflow.py",
-                "status": "completed",
-                "input_schema": {"type": "object"},
-                "input": {},
-                "command": ["python", "launch_mvp_workflow.py"],
-                "workspace": str(Path("/tmp/demo/workspace").resolve()),
-                "trace": [],
-                "artifacts": [],
-                "stdout": "[done] workspace=/tmp/demo/workspace\nartifact=/tmp/demo/workspace/artifacts/research_partner\n",
-                "stderr": "warn path=/tmp/demo/workspace/logs/run.log\n",
-                "returncode": 0,
-            }
+            return_value=_mock_coordinator_run(
+                str(Path("/tmp/demo/workspace").resolve()),
+                stdout="[done] workspace=/tmp/demo/workspace\nartifact=/tmp/demo/workspace/artifacts/research_partner\n",
+                stderr="warn path=/tmp/demo/workspace/logs/run.log\n",
+            )
         )
 
         result = coordinator.run(
@@ -1023,23 +1079,10 @@ class AgentBridgeTest(unittest.TestCase):
     def test_research_partner_execute_sanitizes_materialization_value_error(self) -> None:
         coordinator = PaperForgeCoordinator()
         coordinator.mvp.run = Mock(
-            return_value={
-                "agent": "MvpWorkflowAgent",
-                "entrypoint": "launch_mvp_workflow.py",
-                "status": "completed",
-                "input_schema": {"type": "object"},
-                "input": {},
-                "command": ["python", "launch_mvp_workflow.py"],
-                "workspace": str(Path("/tmp/demo/workspace").resolve()),
-                "trace": [],
-                "artifacts": [],
-                "stdout": "",
-                "stderr": "",
-                "returncode": 0,
-            }
+            return_value=_mock_coordinator_run(str(Path("/tmp/demo/workspace").resolve()))
         )
 
-        with unittest.mock.patch(
+        with patch(
             "agents.coordinator.materialize_proposal_bundle",
             side_effect=ValueError("evidence file must stay within workspace: /tmp/demo/secret.pdf"),
         ):
@@ -1062,23 +1105,10 @@ class AgentBridgeTest(unittest.TestCase):
     def test_research_partner_execute_sanitizes_unexpected_materialization_error(self) -> None:
         coordinator = PaperForgeCoordinator()
         coordinator.mvp.run = Mock(
-            return_value={
-                "agent": "MvpWorkflowAgent",
-                "entrypoint": "launch_mvp_workflow.py",
-                "status": "completed",
-                "input_schema": {"type": "object"},
-                "input": {},
-                "command": ["python", "launch_mvp_workflow.py"],
-                "workspace": str(Path("/tmp/demo/workspace").resolve()),
-                "trace": [],
-                "artifacts": [],
-                "stdout": "",
-                "stderr": "",
-                "returncode": 0,
-            }
+            return_value=_mock_coordinator_run(str(Path("/tmp/demo/workspace").resolve()))
         )
 
-        with unittest.mock.patch(
+        with patch(
             "agents.coordinator.materialize_proposal_bundle",
             side_effect=RuntimeError("internal path /tmp/demo/workspace leaked"),
         ):
@@ -1131,22 +1161,7 @@ class AgentBridgeTest(unittest.TestCase):
             )
 
             coordinator = PaperForgeCoordinator()
-            coordinator.mvp.run = Mock(
-                return_value={
-                    "agent": "MvpWorkflowAgent",
-                    "entrypoint": "launch_mvp_workflow.py",
-                    "status": "completed",
-                    "input_schema": {"type": "object"},
-                    "input": {},
-                    "command": ["python", "launch_mvp_workflow.py"],
-                    "workspace": str(workspace),
-                    "trace": [],
-                    "artifacts": [],
-                    "stdout": "",
-                    "stderr": "",
-                    "returncode": 0,
-                }
-            )
+            coordinator.mvp.run = Mock(return_value=_mock_coordinator_run(str(workspace)))
 
             result = coordinator.run(
                 "research_partner",
@@ -1192,4 +1207,3 @@ class AgentBridgeTest(unittest.TestCase):
                 "artifacts/research_partner/manifest.json",
                 artifact_paths,
             )
-

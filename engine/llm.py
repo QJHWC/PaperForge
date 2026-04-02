@@ -1,12 +1,26 @@
 import json
 import os
 import re
+from typing import Any, Dict
 
 import anthropic
 import backoff
 import openai
 
-MAX_NUM_TOKENS = 4096
+DEFAULT_MAX_NUM_TOKENS = 4096
+DEFAULT_GATEWAY_PROFILE = "safe"
+GATEWAY_PROFILES: Dict[str, Dict[str, Any]] = {
+    "safe": {
+        "stream": False,
+        "max_tokens": 4096,
+        "reasoning_effort": "low",
+    },
+    "full": {
+        "stream": True,
+        "max_tokens": 16384,
+        "reasoning_effort": "high",
+    },
+}
 ANTHROPIC_PROMPT_CACHE_MAX_BREAKPOINTS = 4
 ANTHROPIC_PROMPT_CACHE_DEFAULT_SYSTEM_MIN_CHARS = 512
 ANTHROPIC_PROMPT_CACHE_DEFAULT_USER_MIN_CHARS = 4096
@@ -23,6 +37,8 @@ AVAILABLE_LLMS = [
     "claude-opus-4.6",
     "claude-opus-4-6",
     # OpenAI models
+    "gpt-5.4-xhigh",
+    "gpt-5.4-xhigh-superfast",
     "gpt-5.2-xhigh",
     "gpt-5.3",
     "gpt-5.3-codex",
@@ -122,6 +138,50 @@ def _env_positive_int(var_name: str, default: int) -> int:
     return default
 
 
+def normalize_gateway_profile_name(profile: str | None) -> str:
+    candidate = str(profile or os.getenv("PAPERFORGE_GATEWAY_PROFILE", "")).strip().lower()
+    if candidate in GATEWAY_PROFILES:
+        return candidate
+    return DEFAULT_GATEWAY_PROFILE
+
+
+def resolve_gateway_profile(profile: str | None = None) -> Dict[str, Any]:
+    name = normalize_gateway_profile_name(profile)
+    resolved = {"name": name, **GATEWAY_PROFILES[name]}
+
+    max_tokens_raw = os.getenv("PAPERFORGE_OPENAI_COMPAT_MAX_TOKENS", "").strip()
+    if max_tokens_raw:
+        try:
+            parsed = int(max_tokens_raw)
+            if parsed > 0:
+                resolved["max_tokens"] = parsed
+        except ValueError:
+            pass
+
+    reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "").strip()
+    if reasoning_effort:
+        resolved["reasoning_effort"] = reasoning_effort
+
+    if "PAPERFORGE_AIDER_STREAM" in os.environ:
+        resolved["stream"] = _is_truthy_env("PAPERFORGE_AIDER_STREAM", "0")
+
+    return resolved
+
+
+def gateway_profile_env_overrides(profile: str | None = None) -> Dict[str, str]:
+    resolved = resolve_gateway_profile(profile)
+    return {
+        "PAPERFORGE_GATEWAY_PROFILE": resolved["name"],
+        "PAPERFORGE_AIDER_STREAM": "1" if resolved["stream"] else "0",
+        "PAPERFORGE_OPENAI_COMPAT_MAX_TOKENS": str(resolved["max_tokens"]),
+        "OPENAI_REASONING_EFFORT": str(resolved["reasoning_effort"]),
+    }
+
+
+def _max_num_tokens() -> int:
+    return int(resolve_gateway_profile()["max_tokens"])
+
+
 def _resolve_openai_model_and_reasoning(model: str):
     """
     Allow user-facing aliases like gpt-5.3-codex-xhigh while keeping
@@ -129,6 +189,8 @@ def _resolve_openai_model_and_reasoning(model: str):
     """
     request_model = model
     reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "").strip()
+    if not reasoning_effort:
+        reasoning_effort = str(resolve_gateway_profile()["reasoning_effort"]).strip()
 
     if model in {"gpt-5.3-codex-xhigh", "gpt-5.3-codex xhigh"}:
         request_model = "gpt-5.3-codex"
@@ -542,7 +604,7 @@ def get_batch_responses_from_llm(
                 *new_msg_history,
             ],
             temperature=temperature,
-            max_tokens=MAX_NUM_TOKENS,
+            max_tokens=_max_num_tokens(),
             n=n_responses,
             stop=None,
             seed=0,
@@ -561,7 +623,7 @@ def get_batch_responses_from_llm(
                 *new_msg_history,
             ],
             temperature=temperature,
-            max_tokens=MAX_NUM_TOKENS,
+            max_tokens=_max_num_tokens(),
             n=n_responses,
             stop=None,
         )
@@ -657,7 +719,7 @@ def get_response_from_llm(
 
         request_kwargs = {
             "model": model,
-            "max_tokens": MAX_NUM_TOKENS,
+            "max_tokens": _max_num_tokens(),
             "temperature": temperature,
             "system": system_payload,
             "messages": new_msg_history,
@@ -671,7 +733,7 @@ def get_response_from_llm(
                 system_payload = _strip_cache_control_from_system(system_payload)
                 response = client.messages.create(
                     model=model,
-                    max_tokens=MAX_NUM_TOKENS,
+                    max_tokens=_max_num_tokens(),
                     temperature=temperature,
                     system=system_payload,
                     messages=new_msg_history,
@@ -704,7 +766,7 @@ def get_response_from_llm(
                 *new_msg_history,
             ],
             temperature=temperature,
-            max_tokens=MAX_NUM_TOKENS,
+            max_tokens=_max_num_tokens(),
             n=1,
             stop=None,
             seed=0,
@@ -721,7 +783,7 @@ def get_response_from_llm(
                 *new_msg_history,
             ],
             temperature=temperature,
-            max_tokens=MAX_NUM_TOKENS,
+            max_tokens=_max_num_tokens(),
             n=1,
             stop=None,
         )
@@ -736,7 +798,7 @@ def get_response_from_llm(
                 *new_msg_history,
             ],
             temperature=1,
-            max_completion_tokens=MAX_NUM_TOKENS,
+            max_completion_tokens=_max_num_tokens(),
             n=1,
             seed=0,
         )
@@ -751,7 +813,7 @@ def get_response_from_llm(
                 *new_msg_history,
             ],
             temperature=temperature,
-            max_tokens=MAX_NUM_TOKENS,
+            max_tokens=_max_num_tokens(),
             n=1,
             stop=None,
         )
@@ -766,7 +828,7 @@ def get_response_from_llm(
                 *new_msg_history,
             ],
             temperature=temperature,
-            max_tokens=MAX_NUM_TOKENS,
+            max_tokens=_max_num_tokens(),
             n=1,
             stop=None,
         )
@@ -794,7 +856,7 @@ def get_response_from_llm(
                 *new_msg_history,
             ],
             temperature=temperature,
-            max_tokens=MAX_NUM_TOKENS,
+            max_tokens=_max_num_tokens(),
             n=1,
         )
         content = response.choices[0].message.content

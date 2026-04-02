@@ -22,9 +22,13 @@ class WriteupAgentConfig:
     workflow_kind: str = "mvp"
     workspace: str | None = None
     folder: str | None = None
-    writeup_model: str = "claude-sonnet-4-6"
+    writeup_model: str = "gpt-5.4-xhigh"
     engine: str = "openalex"
     refine_profile: str = "balanced"
+    gateway_profile: str | None = None
+    existing_draft: str | None = None
+    enforce_disclosure: bool | None = None
+    skip_chktex_fix: bool | None = None
     no_writing: bool = False
     execute: bool = False
 
@@ -68,9 +72,13 @@ class WriteupAgent:
             workflow_kind=str(kwargs.get("workflow_kind", "mvp")),
             workspace=kwargs.get("workspace"),
             folder=kwargs.get("folder"),
-            writeup_model=str(kwargs.get("writeup_model", "claude-sonnet-4-6")),
+            writeup_model=str(kwargs.get("writeup_model", "gpt-5.4-xhigh")),
             engine=str(kwargs.get("engine", "openalex")),
             refine_profile=str(kwargs.get("refine_profile", "balanced")),
+            gateway_profile=kwargs.get("gateway_profile"),
+            existing_draft=kwargs.get("existing_draft"),
+            enforce_disclosure=kwargs.get("enforce_disclosure"),
+            skip_chktex_fix=kwargs.get("skip_chktex_fix"),
             no_writing=bool(kwargs.get("no_writing", False)),
             execute=bool(kwargs.get("execute", False)),
         )
@@ -82,6 +90,16 @@ class WriteupAgent:
             _append_option(command, "--folder", folder)
             _append_option(command, "--model", cfg.writeup_model)
             _append_option(command, "--engine", cfg.engine)
+            _append_option(command, "--gateway-profile", cfg.gateway_profile)
+            _append_option(command, "--existing-draft", cfg.existing_draft)
+            if cfg.enforce_disclosure is True:
+                command.append("--enforce-disclosure")
+            if cfg.enforce_disclosure is False:
+                command.append("--no-enforce-disclosure")
+            if cfg.skip_chktex_fix is True:
+                command.append("--skip-chktex-fix")
+            if cfg.skip_chktex_fix is False:
+                command.append("--no-skip-chktex-fix")
             _append_flag(command, "--no-writing", cfg.no_writing)
             return command
 
@@ -92,6 +110,16 @@ class WriteupAgent:
         _append_option(command, "--writeup-model", cfg.writeup_model)
         _append_option(command, "--engine", cfg.engine)
         _append_option(command, "--refine-profile", cfg.refine_profile)
+        _append_option(command, "--gateway-profile", cfg.gateway_profile)
+        _append_option(command, "--existing-draft", cfg.existing_draft)
+        if cfg.enforce_disclosure is True:
+            command.append("--enforce-disclosure")
+        if cfg.enforce_disclosure is False:
+            command.append("--no-enforce-disclosure")
+        if cfg.skip_chktex_fix is True:
+            command.append("--skip-chktex-fix")
+        if cfg.skip_chktex_fix is False:
+            command.append("--no-skip-chktex-fix")
         return command
 
     def run(self, **kwargs: Any) -> Dict[str, Any]:

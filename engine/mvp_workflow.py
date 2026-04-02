@@ -16,6 +16,9 @@ DEFAULT_TEMPLATE_REQUIRED_FILES = [
     "experiment.py",
     "plot.py",
     "latex/template.tex",
+    "latex/ieeecolor.cls",
+    "latex/generic.sty",
+    "latex/TII.eps",
 ]
 
 

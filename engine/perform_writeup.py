@@ -6,12 +6,19 @@ import re
 import runpy
 import shutil
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from engine.generate_ideas import search_for_papers
-from engine.llm import get_response_from_llm, extract_json_between_markers, create_client, AVAILABLE_LLMS
+from engine.llm import (
+    AVAILABLE_LLMS,
+    create_client,
+    extract_json_between_markers,
+    gateway_profile_env_overrides,
+    get_response_from_llm,
+)
 from engine.run_lock import run_lock
 ORIGINAL_NUM_CITE_ROUNDS = 20
 ORIGINAL_NUM_ERROR_CORRECTIONS = 5
@@ -153,6 +160,14 @@ def _env_int(name: str, default: int) -> int:
         return max(0, int(os.getenv(name, str(default))))
     except ValueError:
         return default
+
+
+def _deprecated_env_override(name: str) -> Optional[str]:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    print(f"[deprecated] {name} is deprecated; use CLI arguments or workspace_config.json instead.")
+    return raw
 
 
 PRACTICAL_PROMPT_KEYS = [
@@ -413,14 +428,157 @@ def _ensure_disclosure(tex_text: str) -> str:
     return tex_text
 
 
-def _sanitize_template_tex_file(path: str) -> None:
+def _sanitize_template_tex_file(path: str, *, enforce_disclosure: bool = True) -> None:
     with open(path, "r", encoding="utf-8") as f:
         tex_text = f.read()
     sanitized = _sanitize_template_tex_contents(tex_text)
-    sanitized = _ensure_disclosure(sanitized)
+    if enforce_disclosure:
+        sanitized = _ensure_disclosure(sanitized)
     if sanitized != tex_text:
         with open(path, "w", encoding="utf-8") as f:
             f.write(sanitized)
+
+
+_LATEX_FIGURE_EXTENSIONS = (".png", ".pdf", ".jpg", ".jpeg", ".webp", ".svg", ".eps")
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_TII_TEMPLATE_DIR = _REPO_ROOT / "论文写作" / ".archive_20260326" / "TII-Articles-LaTeX-template"
+_LATEX_SUPPORT_FILES = ("ieeecolor.cls", "generic.sty", "TII.eps")
+
+
+def _extract_external_bibliography_targets(tex_text: str) -> List[str]:
+    matches = re.findall(r"\\bibliography\{([^}]*)\}", tex_text)
+    targets: List[str] = []
+    for item in matches:
+        for name in item.split(","):
+            cleaned = name.strip()
+            if cleaned:
+                targets.append(cleaned)
+    return targets
+
+
+def _resolve_external_bib_files(cwd: str, tex_text: str) -> List[str]:
+    resolved: List[str] = []
+    seen = set()
+    for target in _extract_external_bibliography_targets(tex_text):
+        candidate = target if target.endswith(".bib") else f"{target}.bib"
+        path = candidate if osp.isabs(candidate) else osp.join(cwd, candidate)
+        normalized = osp.abspath(path)
+        if osp.exists(normalized) and normalized not in seen:
+            seen.add(normalized)
+            resolved.append(normalized)
+    return resolved
+
+
+def _load_available_bibliography_text(cwd: str, tex_text: str) -> tuple[Optional[str], bool]:
+    embedded = _extract_embedded_references_bib(tex_text)
+    if embedded is not None:
+        return embedded, True
+    if _has_inline_thebibliography(tex_text):
+        return None, False
+    external_files = _resolve_external_bib_files(cwd, tex_text)
+    if external_files:
+        contents: List[str] = []
+        for path in external_files:
+            with open(path, "r", encoding="utf-8") as f:
+                contents.append(f.read())
+        return "\n".join(contents), True
+    return None, False
+
+
+def _extract_embedded_references_bib(tex_text: str) -> Optional[str]:
+    match = re.search(
+        r"\\begin{filecontents}{references.bib}(.*?)\\end{filecontents}",
+        tex_text,
+        re.DOTALL,
+    )
+    if match is None:
+        return None
+    return match.group(1)
+
+
+def _has_inline_thebibliography(tex_text: str) -> bool:
+    return re.search(r"\\begin{thebibliography}", tex_text) is not None
+
+
+def _list_available_figures(cwd: str) -> List[str]:
+    available: List[str] = []
+    for root, _, files in os.walk(cwd):
+        for filename in files:
+            if Path(filename).suffix.lower() not in _LATEX_FIGURE_EXTENSIONS:
+                continue
+            available.append(osp.relpath(osp.join(root, filename), cwd))
+    return sorted(available)
+
+
+def _figure_exists(cwd: str, figure: str) -> bool:
+    candidate = figure.strip()
+    if not candidate:
+        return False
+
+    candidates = [candidate]
+    _, ext = osp.splitext(candidate)
+    if not ext:
+        candidates.extend(f"{candidate}{suffix}" for suffix in _LATEX_FIGURE_EXTENSIONS)
+
+    for item in candidates:
+        path = item if osp.isabs(item) else osp.join(cwd, item)
+        if osp.exists(path):
+            return True
+    return False
+
+
+def _ensure_latex_support_files(cwd: str) -> None:
+    target_dir = Path(cwd)
+    for filename in _LATEX_SUPPORT_FILES:
+        target = target_dir / filename
+        if target.exists():
+            continue
+        source = _TII_TEMPLATE_DIR / filename
+        if source.exists():
+            shutil.copy2(source, target)
+
+
+@dataclass
+class ChktexResult:
+    errors: List[str]
+    warnings: List[str]
+    raw_output: str
+
+
+def run_chktex(latex_dir: str, tex_file: str) -> ChktexResult:
+    proc = subprocess.run(
+        ["chktex", tex_file, "-q", "-v0", "-f", "%k|%n|%l|%c|%m\n"],
+        cwd=latex_dir,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    raw_output = proc.stdout or ""
+    errors: List[str] = []
+    warnings: List[str] = []
+    for line in raw_output.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parts = stripped.split("|", 4)
+        if len(parts) == 5:
+            kind, msg_id, row, col, message = parts
+            rendered = f"{kind} {msg_id} at {row}:{col}: {message}".strip()
+            lowered = kind.lower()
+            if lowered.startswith("error"):
+                errors.append(rendered)
+            else:
+                warnings.append(rendered)
+            continue
+        lowered = stripped.lower()
+        if lowered.startswith("error"):
+            errors.append(stripped)
+        else:
+            warnings.append(stripped)
+    return ChktexResult(errors=errors, warnings=warnings, raw_output=raw_output)
 
 
 # GENERATE LATEX
@@ -432,42 +590,41 @@ def generate_latex(
     num_error_corrections=PAPERFORGE_DEFAULT_NUM_ERROR_CORRECTIONS,
     checkpoint_enabled: bool = False,
     checkpoint_resume_round: int = 0,
+    enforce_disclosure: bool = True,
+    skip_chktex_fix: bool = False,
 ):
     folder = osp.abspath(folder_name)
     cwd = osp.join(folder, "latex")  # Fixed potential issue with path
+    _ensure_latex_support_files(cwd)
     writeup_file = osp.join(cwd, "template.tex")
-    _sanitize_template_tex_file(writeup_file)
+    _sanitize_template_tex_file(writeup_file, enforce_disclosure=enforce_disclosure)
 
     # Check all references are valid and in the references.bib file
     with open(writeup_file, "r") as f:
         tex_text = f.read()
     cites = re.findall(r"\\cite[a-z]*{([^}]*)}", tex_text)
-    references_bib = re.search(
-        r"\\begin{filecontents}{references.bib}(.*?)\\end{filecontents}",
-        tex_text,
-        re.DOTALL,
-    )
-    if references_bib is None:
-        print("No references.bib found in template.tex")
-        return
-    bib_text = references_bib.group(1)
-    cites = [cite.strip() for item in cites for cite in item.split(",")]
-    for cite in cites:
-        if cite not in bib_text:
-            print(f"Reference {cite} not found in references.")
-            prompt = f"""Reference {cite} not found in references.bib. Is this included under a different name?
+    bib_text, use_bibtex = _load_available_bibliography_text(cwd, tex_text)
+    if bib_text is None and not _has_inline_thebibliography(tex_text):
+        print("No references.bib, external bibliography, or inline thebibliography found in template.tex")
+        return False
+    if bib_text is not None:
+        cites = [cite.strip() for item in cites for cite in item.split(",")]
+        for cite in cites:
+            if cite not in bib_text:
+                print(f"Reference {cite} not found in references.")
+                prompt = f"""Reference {cite} not found in references.bib. Is this included under a different name?
 If so, please modify the citation in template.tex to match the name in references.bib at the top. Otherwise, remove the cite."""
-            coder.run(prompt)
+                coder.run(prompt)
 
     # Check all included figures are actually in the directory.
     with open(writeup_file, "r") as f:
         tex_text = f.read()
     referenced_figs = re.findall(r"\\includegraphics.*?{(.*?)}", tex_text)
-    all_figs = [f for f in os.listdir(folder) if f.endswith(".png")]
+    available_figs = _list_available_figures(cwd)
     for figure in referenced_figs:
-        if figure not in all_figs:
+        if not _figure_exists(cwd, figure):
             print(f"Figure {figure} not found in directory.")
-            prompt = f"""The image {figure} not found in the directory. The images in the directory are: {all_figs}.
+            prompt = f"""The image {figure} not found in the directory. The images in the directory are: {available_figs}.
 Please ensure that the figure is in the directory and that the filename is correct. Check the notes to see what each figure contains."""
             coder.run(prompt)
 
@@ -496,51 +653,51 @@ If duplicated, identify the best location for the section header and remove any 
             coder.run(prompt)
 
     # Iteratively fix any LaTeX bugs
-    for i in range(num_error_corrections):
-        round_idx = i + 1
-        if checkpoint_enabled and round_idx <= max(0, checkpoint_resume_round):
-            print(f"[writeup][checkpoint] skipping latex_fix round {round_idx}")
-            continue
-        # Filter trivial bugs in chktex
-        chktex_proc = subprocess.run(
-            ["chktex", writeup_file, "-q", "-n2", "-n24", "-n13", "-n1"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=False,
-        )
-        check_output = chktex_proc.stdout
-        if check_output:
-            prompt = f"""Please fix the following LaTeX errors in `template.tex` guided by the output of `chktex`:
-{check_output}.
-
-Make the minimal fix required and do not remove or change any packages.
-Pay attention to any accidental uses of HTML syntax, e.g. </end instead of \\end.
-"""
-            coder.run(prompt)
-            _sanitize_template_tex_file(writeup_file)
-            if checkpoint_enabled:
-                _save_writeup_checkpoint(
-                    folder,
-                    stage="latex_fix",
-                    current_round=round_idx,
-                    writeup_tex_file=writeup_file,
-                    snapshot_name=f"template_latex_{round_idx}.tex",
-                )
-        else:
+    if skip_chktex_fix:
+        print("[writeup] skipping chktex auto-fix in existing manuscript mode.")
+        chktex_result = run_chktex(cwd, writeup_file)
+        if chktex_result.errors:
+            error_path = Path(cwd) / "chktex_errors.txt"
+            error_path.write_text("\n".join(chktex_result.errors) + "\n", encoding="utf-8")
+            raise RuntimeError(f"chktex blocking errors: {error_path}")
+        if chktex_result.warnings:
+            warning_path = Path(cwd) / "chktex_warnings.txt"
+            warning_path.write_text("\n".join(chktex_result.warnings) + "\n", encoding="utf-8")
+    else:
+        for i in range(num_error_corrections):
+            round_idx = i + 1
+            if checkpoint_enabled and round_idx <= max(0, checkpoint_resume_round):
+                print(f"[writeup][checkpoint] skipping latex_fix round {round_idx}")
+                continue
+            chktex_result = run_chktex(cwd, writeup_file)
+            if chktex_result.errors:
+                error_path = Path(cwd) / "chktex_errors.txt"
+                error_path.write_text("\n".join(chktex_result.errors) + "\n", encoding="utf-8")
+                raise RuntimeError(f"chktex blocking errors: {error_path}")
+            if chktex_result.warnings:
+                warning_path = Path(cwd) / "chktex_warnings.txt"
+                warning_path.write_text("\n".join(chktex_result.warnings) + "\n", encoding="utf-8")
             break
-    return compile_latex(cwd, pdf_file, timeout=timeout)
+    with open(writeup_file, "r") as f:
+        tex_text = f.read()
+    use_bibtex = _load_available_bibliography_text(cwd, tex_text)[1]
+    return compile_latex(cwd, pdf_file, timeout=timeout, use_bibtex=use_bibtex)
 
 
-def compile_latex(cwd, pdf_file, timeout=30):
+def compile_latex(cwd, pdf_file, timeout=30, use_bibtex: bool = True):
     print("GENERATING LATEX")
+    compile_log_path = Path(cwd) / "compile_output.log"
+    compile_chunks: List[str] = []
 
-    commands = [
-        ["pdflatex", "-interaction=nonstopmode", "template.tex"],
-        ["bibtex", "template"],
-        ["pdflatex", "-interaction=nonstopmode", "template.tex"],
-        ["pdflatex", "-interaction=nonstopmode", "template.tex"],
-    ]
+    commands = [["pdflatex", "-interaction=nonstopmode", "template.tex"]]
+    if use_bibtex:
+        commands.append(["bibtex", "template"])
+    commands.extend(
+        [
+            ["pdflatex", "-interaction=nonstopmode", "template.tex"],
+            ["pdflatex", "-interaction=nonstopmode", "template.tex"],
+        ]
+    )
 
     for command in commands:
         try:
@@ -550,14 +707,27 @@ def compile_latex(cwd, pdf_file, timeout=30):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
+            )
+            compile_chunks.append(
+                "## Command: {cmd}\n\n### STDOUT\n{stdout}\n\n### STDERR\n{stderr}\n".format(
+                    cmd=" ".join(command),
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                )
             )
             print("Standard Output:\n", result.stdout)
             print("Standard Error:\n", result.stderr)
         except subprocess.TimeoutExpired:
             print(f"Latex timed out after {timeout} seconds")
+            compile_chunks.append(f"## Command timed out after {timeout}s: {' '.join(command)}\n")
         except subprocess.CalledProcessError as e:
             print(f"Error running command {' '.join(command)}: {e}")
+            compile_chunks.append(f"## Command error: {' '.join(command)} -> {e}\n")
+
+    compile_log_path.write_text("\n".join(compile_chunks), encoding="utf-8")
 
     print("FINISHED GENERATING LATEX")
 
@@ -857,6 +1027,9 @@ def perform_writeup(
         cite_model,
         num_cite_rounds=PAPERFORGE_DEFAULT_NUM_CITE_ROUNDS,
         engine="semanticscholar",
+        existing_draft_path: str | None = None,
+        enforce_disclosure: bool | None = None,
+        skip_chktex_fix: bool | None = None,
 ):
     num_cite_rounds = _env_int("WRITEUP_CITE_ROUNDS", num_cite_rounds)
     second_refinement_enabled = _env_bool(
@@ -869,8 +1042,30 @@ def perform_writeup(
     )
     checkpoint_enabled = _env_bool("WRITEUP_ENABLE_CHECKPOINT", "1")
     reset_checkpoint = _env_bool("WRITEUP_RESET_CHECKPOINT", "0")
+    use_existing_draft = existing_draft_path is not None
+    if not use_existing_draft and _deprecated_env_override("WRITEUP_USE_EXISTING_DRAFT") is not None:
+        use_existing_draft = _env_bool("WRITEUP_USE_EXISTING_DRAFT", "0")
+    if enforce_disclosure is None:
+        deprecated = _deprecated_env_override("WRITEUP_ENFORCE_DISCLOSURE")
+        if deprecated is not None:
+            enforce_disclosure = _env_bool("WRITEUP_ENFORCE_DISCLOSURE", "1")
+        else:
+            enforce_disclosure = not use_existing_draft
+    if skip_chktex_fix is None:
+        deprecated = _deprecated_env_override("WRITEUP_SKIP_CHKTEX_FIX")
+        if deprecated is not None:
+            skip_chktex_fix = _env_bool("WRITEUP_SKIP_CHKTEX_FIX", "0")
+        else:
+            skip_chktex_fix = use_existing_draft
     writeup_tex_file = osp.join(folder_name, "latex", "template.tex")
     final_pdf_file = f"{folder_name}/{idea['Name']}.pdf"
+    if existing_draft_path:
+        source_draft = Path(existing_draft_path).expanduser().resolve()
+        target_draft = Path(writeup_tex_file).resolve()
+        if not source_draft.exists():
+            raise FileNotFoundError(f"existing draft not found: {source_draft}")
+        if source_draft != target_draft:
+            shutil.copy2(source_draft, target_draft)
 
     checkpoint_state = _default_writeup_checkpoint()
     if checkpoint_enabled:
@@ -895,7 +1090,12 @@ def perform_writeup(
             checkpoint_state["stage"] = "latex_fix"
 
     style_guidelines = _build_style_guidelines(_extract_theme_text(idea))
-    _sanitize_template_tex_file(writeup_tex_file)
+    _sanitize_template_tex_file(writeup_tex_file, enforce_disclosure=bool(enforce_disclosure))
+
+    if use_existing_draft and _checkpoint_stage_rank(checkpoint_state["stage"]) < _checkpoint_stage_rank("latex_fix"):
+        print("[writeup] existing manuscript mode enabled; skipping init/cite/refine stages.")
+        checkpoint_state["stage"] = "latex_fix"
+        checkpoint_state["current_round"] = 0
 
     if _checkpoint_stage_rank(checkpoint_state["stage"]) < _checkpoint_stage_rank("init"):
         # CURRENTLY ASSUMES LATEX
@@ -959,7 +1159,7 @@ Do not modify `references.bib` to add any new citations, this will be filled in 
 Be sure to first name the file and use *SEARCH/REPLACE* blocks to perform these edits.
 """
         coder.run(_append_style(section_prompt, style_guidelines))
-        _sanitize_template_tex_file(writeup_tex_file)
+        _sanitize_template_tex_file(writeup_tex_file, enforce_disclosure=bool(enforce_disclosure))
         if checkpoint_enabled:
             checkpoint_state = _save_writeup_checkpoint(
                 folder_name,
@@ -1001,7 +1201,7 @@ Be sure to first name the file and use *SEARCH/REPLACE* blocks to perform these 
                 with open(writeup_tex_file, "w") as f:
                     f.write(draft)
                 coder.run(_append_style(prompt, style_guidelines))
-            _sanitize_template_tex_file(writeup_tex_file)
+            _sanitize_template_tex_file(writeup_tex_file, enforce_disclosure=bool(enforce_disclosure))
             if checkpoint_enabled:
                 checkpoint_state = _save_writeup_checkpoint(
                     folder_name,
@@ -1024,7 +1224,7 @@ Be sure to first name the file and use *SEARCH/REPLACE* blocks to perform these 
                     style_guidelines,
                 )
             )
-            _sanitize_template_tex_file(writeup_tex_file)
+            _sanitize_template_tex_file(writeup_tex_file, enforce_disclosure=bool(enforce_disclosure))
             if checkpoint_enabled:
                 checkpoint_state = _save_writeup_checkpoint(
                     folder_name,
@@ -1062,7 +1262,7 @@ First, re-think the Title if necessary. Keep this concise and descriptive of the
                     style_guidelines,
                 )
             )
-            _sanitize_template_tex_file(writeup_tex_file)
+            _sanitize_template_tex_file(writeup_tex_file, enforce_disclosure=bool(enforce_disclosure))
             if checkpoint_enabled:
                 checkpoint_state = _save_writeup_checkpoint(
                     folder_name,
@@ -1086,7 +1286,7 @@ First, re-think the Title if necessary. Keep this concise and descriptive of the
                     style_guidelines,
                 )
             )
-            _sanitize_template_tex_file(writeup_tex_file)
+            _sanitize_template_tex_file(writeup_tex_file, enforce_disclosure=bool(enforce_disclosure))
             if checkpoint_enabled:
                 checkpoint_state = _save_writeup_checkpoint(
                     folder_name,
@@ -1113,8 +1313,10 @@ First, re-think the Title if necessary. Keep this concise and descriptive of the
         num_error_corrections=num_error_corrections,
         checkpoint_enabled=checkpoint_enabled,
         checkpoint_resume_round=latex_resume_round,
+        enforce_disclosure=bool(enforce_disclosure),
+        skip_chktex_fix=bool(skip_chktex_fix),
     )
-    _sanitize_template_tex_file(writeup_tex_file)
+    _sanitize_template_tex_file(writeup_tex_file, enforce_disclosure=bool(enforce_disclosure))
     if checkpoint_enabled and latex_ok:
         _save_writeup_checkpoint(
             folder_name,
@@ -1139,7 +1341,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-4o-2024-05-13",
+        default="gpt-5.4-xhigh",
         choices=AVAILABLE_LLMS,
         help="Model to use for PaperForge.",
     )
@@ -1150,7 +1352,16 @@ if __name__ == "__main__":
         choices=["semanticscholar", "openalex"],
         help="Scholar engine to use.",
     )
+    parser.add_argument("--gateway-profile", choices=["safe", "full"], default=None)
+    parser.add_argument("--existing-draft", default=None)
+    parser.add_argument("--enforce-disclosure", dest="enforce_disclosure", action="store_true")
+    parser.add_argument("--no-enforce-disclosure", dest="enforce_disclosure", action="store_false")
+    parser.add_argument("--skip-chktex-fix", dest="skip_chktex_fix", action="store_true")
+    parser.add_argument("--no-skip-chktex-fix", dest="skip_chktex_fix", action="store_false")
+    parser.set_defaults(enforce_disclosure=None, skip_chktex_fix=None)
     args = parser.parse_args()
+    for key, value in gateway_profile_env_overrides(args.gateway_profile).items():
+        os.environ[key] = value
     client, client_model = create_client(args.model)
     print("Make sure you cleaned the Aider logs if re-generating the writeup!")
     folder_name = args.folder
@@ -1181,15 +1392,31 @@ if __name__ == "__main__":
         main_model=main_model,
         fnames=fnames,
         io=io,
-        stream=False,
+        stream=_env_bool("PAPERFORGE_AIDER_STREAM", "1"),
         use_git=False,
         edit_format="diff",
     )
     with run_lock(Path(folder_name).resolve(), timeout=30, poll_interval=0.2, verbose=True):
         if args.no_writing:
-            generate_latex(coder, args.folder, f"{args.folder}/test.pdf")
+            generate_latex(
+                coder,
+                args.folder,
+                f"{args.folder}/test.pdf",
+                enforce_disclosure=bool(args.enforce_disclosure) if args.enforce_disclosure is not None else True,
+                skip_chktex_fix=bool(args.skip_chktex_fix),
+            )
         else:
             try:
-                perform_writeup(idea, folder_name, coder, client, client_model, engine=args.engine)
+                perform_writeup(
+                    idea,
+                    folder_name,
+                    coder,
+                    client,
+                    client_model,
+                    engine=args.engine,
+                    existing_draft_path=args.existing_draft,
+                    enforce_disclosure=args.enforce_disclosure,
+                    skip_chktex_fix=args.skip_chktex_fix,
+                )
             except Exception as e:
                 print(f"Failed to perform writeup: {e}")

@@ -1,28 +1,26 @@
 # PaperForge
 
-**面向研究论文生成、实验驱动写作与 Proposal-first 研究收敛的自动化流水线。**
+面向研究论文生成、实验驱动写作、现有成稿精修与模板迁移的自动化工作台。
 
-PaperForge 将文献检索、实验编排、云端训练、LaTeX 写作与研究提案收敛串成一套可脚本化流程，支持多种 LLM 后端（Anthropic、OpenAI、Gemini、DeepSeek）。
+PaperForge 将文献检索、实验编排、LaTeX 写作、Proposal-first 收敛、浏览器前端控制台以及模板迁移整合为一套可脚本化流程。当前发布版聚焦于可直接运行、可点击操作、可查看历史记录的本地工作流体验。
 
 ## 当前主线
 
-- `research_partner` — 2.0 Alpha 默认主线：证据摄入 → idea framing → claim graph → critique → proposal artifacts
-- `mvp` — 分阶段论文流水线：bootstrap → feedback → optimize → refine → cloud
-- `scientist` — 全自动主线：idea → experiment → writeup → review → improvement
+- `research_partner`：证据摄入 → idea framing → claim graph → critique → proposal artifacts
+- `mvp`：bootstrap → feedback → optimize → refine → cloud
+- `scientist`：idea → experiment → writeup → review → improvement
+- `writeup`：对现有 workspace 或 scientist folder 单独触发写作/编译
+- `template migration`：导入现有 `.tex` 初稿与目标模板目录，迁移并同步渲染 PDF
 
-![PaperForge 界面预览](docs/images/screenshot.png)
+## 界面预览
 
-## 文档导航
+### 浏览器工作台
 
-README 只保留高层叙事、入口命令与仓库导航；字段级 contract、验收矩阵与阶段细节以下列独立文档为准：
+![发布界面 1](docs/images/release_ui_1.png)
+![发布界面 2](docs/images/release_ui_2.png)
+![发布界面 3](docs/images/release_ui_3.png)
 
-- [`RELEASE_NOTES_v2.0_Alpha.md`](RELEASE_NOTES_v2.0_Alpha.md) — 本轮 Alpha 发布摘要、已交付能力与已知边界
-- [`docs/paperforge-2.0-improvement-plan.md`](docs/paperforge-2.0-improvement-plan.md) — 2.0 收敛版规划、当前 Alpha 状态与后续 phase
-- [`docs/paperforge-workflow-equivalence-spec.md`](docs/paperforge-workflow-equivalence-spec.md) — 既有 scientist / mvp / writeup 行为等价基线
-- [`docs/paperforge-equivalence-matrix.md`](docs/paperforge-equivalence-matrix.md) — 行为等价验收矩阵
-- [`docs/paperforge-json-artifact-contracts.md`](docs/paperforge-json-artifact-contracts.md) — workspace / JSON / artifact 合同说明
-
-## 快速开始
+## 安装与启动
 
 ### 1. 环境准备
 
@@ -32,157 +30,205 @@ source .venv311/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. 配置 API Key
+### 2. 配置 API
 
 ```bash
 cp key.example.sh key.sh
-# 编辑 key.sh，填入 API Key
+# 编辑 key.sh，填入你的 API Key / Base URL
 source key.sh
 ```
 
-### 3. 运行 Research Partner（推荐）
+### 3. 启动浏览器前端
+
+```bash
+source .venv311/bin/activate
+python frontend/server.py
+```
+
+然后在浏览器打开：
+
+```text
+http://127.0.0.1:8080
+```
+
+当前前端支持：
+
+- 点击启动 `mvp / scientist / research_partner / writeup`
+- 点击 `Pause / Resume / Stop`
+- 点击打开 PDF / TEX / compile log
+- 导入 LaTeX 初稿
+- 导入目标模板目录
+- 执行模板迁移
+- 查看历史记录与回收站
+- 编辑 workspace 级配置
+
+## LaTeX 初稿与模板迁移
+
+当前迁移能力为 **LaTeX v1**：
+
+- 初稿只支持 `原始 .tex`
+- 可附带一个 `preview.pdf` 作为预览
+- 可附带 figures / bib / cls / sty 等伴随资源
+- 目标模板来自 **用户上传的 LaTeX 模板目录**
+- 支持：
+  - 已知模板 profile：`ieee_tii`、`cjc`
+  - 或目录中自带 `paperforge_template.json` 的自定义模板
+- 迁移完成后会自动生成：
+  - `migrations/<migration_id>/output/main.tex`
+  - `migrations/<migration_id>/output/main.pdf`
+  - workspace 根目录下的 `migrated_<template_id>.tex`
+  - workspace 根目录下的 `migrated_<template_id>.pdf`
+
+### 独立迁移命令
+
+```bash
+source .venv311/bin/activate
+python launch_template_migration.py \
+  --workspace results/paper_writer/<run_name> \
+  --source-draft-id <draft_id> \
+  --template-id <template_id> \
+  --output-name release_migration
+```
+
+## 现有成稿 refine
+
+如果你已经有一份 `.tex` 主稿，可以直接走正式化的 `--existing-draft` 接口：
+
+```bash
+source .venv311/bin/activate
+source key.sh
+
+python launch_mvp_workflow.py \
+  --phase refine \
+  --run-dir results/paper_writer/<run_name> \
+  --existing-draft /absolute/path/to/manuscript.tex \
+  --gateway-profile safe \
+  --writeup-model gpt-5.4-xhigh \
+  --engine openalex \
+  --no-enforce-disclosure \
+  --skip-chktex-fix
+```
+
+当前推荐默认网关档位：
+
+- `safe`：`stream=False`, `max_tokens=4096`, `reasoning_effort=low`
+- `full`：仅在你明确需要更高生成强度时使用
+
+## 统一入口示例
+
+### Research Partner
 
 ```bash
 python launch_user_entry.py research_partner \
+  --claude-protocol openai \
+  --openai-api-key "$OPENAI_API_KEY" \
   --experiment paper_writer \
-  --title "Frequency-Domain Global Regression for Artifact Suppression" \
-  --description "构建动态伪影抑制结合频率域全局回归的全色锐化网络架构，并设计消融实验。" \
+  --title "Evidence-first Research Session" \
+  --description "Bootstrap a research partner workspace with evidence files." \
   --engine openalex \
   --rubric-profile cvpr \
   --evidence-file /absolute/path/paper.pdf \
   --evidence-file /absolute/path/results.csv
 ```
 
-如只想查看将执行的命令而不真正运行：
+### MVP
 
 ```bash
-python launch_user_entry.py research_partner --dry-run
+python launch_user_entry.py mvp \
+  --claude-protocol openai \
+  --openai-api-key "$OPENAI_API_KEY" \
+  --phase refine \
+  --run-dir results/paper_writer/<run_name> \
+  --gateway-profile safe \
+  --writeup-model gpt-5.4-xhigh
 ```
 
-### 4. 运行 MVP 流程
+### Scientist
 
 ```bash
-# 完整流程
-python launch_mvp_workflow.py \
-  --phase all \
+python launch_user_entry.py scientist \
+  --claude-protocol openai \
+  --openai-api-key "$OPENAI_API_KEY" \
   --experiment paper_writer \
-  --idea-name "My Research Idea" \
-  --engine openalex
-
-# 单阶段运行
-python launch_mvp_workflow.py --phase bootstrap --experiment paper_writer
-```
-
-### 5. 运行 Scientist 流程
-
-```bash
-python launch_scientist.py \
-  --experiment paper_writer \
+  --model gpt-5.4-xhigh \
+  --gateway-profile safe \
   --num-ideas 1 \
   --skip-novelty-check
 ```
 
-### 6. 查看前端控制台
+### Writeup
 
 ```bash
-# 列出所有 workspace
-python -m frontend.console
-
-# 查看单个 workspace 详情
-python -m frontend.console --workspace results/<experiment>/<run>/
-
-# 自动刷新（每 5 秒）
-python -m frontend.console --watch 5
-
-# 查看写作 Prompt 目录
-python -m frontend.console --prompts
+python launch_user_entry.py writeup \
+  --claude-protocol openai \
+  --openai-api-key "$OPENAI_API_KEY" \
+  --workflow-kind mvp \
+  --workspace results/paper_writer/<run_name> \
+  --gateway-profile safe \
+  --writeup-model gpt-5.4-xhigh
 ```
 
-## Research Partner 输出概览
-
-`research_partner` 当前会在 workspace 下生成：
-
-```text
-artifacts/research_partner/
-├── idea_brief.json
-├── claim_graph.json
-├── critique_report.json
-├── proposal_brief.md
-├── experiment_blueprint.json
-├── expected_figures.json
-├── rubric_scorecard.json
-├── evidence_index.json
-└── manifest.json
-```
-
-如需查看字段语义、Alpha 已交付范围和后续 roadmap，请分别参考：
-
-- [`RELEASE_NOTES_v2.0_Alpha.md`](RELEASE_NOTES_v2.0_Alpha.md)
-- [`docs/paperforge-2.0-improvement-plan.md`](docs/paperforge-2.0-improvement-plan.md)
-- [`docs/paperforge-json-artifact-contracts.md`](docs/paperforge-json-artifact-contracts.md)
-
-## 项目结构
+## 目录概览
 
 ```text
 PaperForge/
-├── launch_user_entry.py        # 统一入口
-├── launch_mvp_workflow.py      # MVP 流程编排
-├── launch_scientist.py         # Scientist 流程
-├── engine/                     # 核心引擎
-│   ├── llm.py                  # LLM client 统一封装
-│   ├── mvp_workflow.py         # workspace 生命周期
-│   ├── perform_review.py       # reviewer / committee 评审底座
-│   └── research_partner/       # Proposal-first pipeline
-├── agents/                     # Agent bridge 层
-├── frontend/                   # 前端控制台
-├── mcp_servers/                # MCP 工具接口层
-├── skills/                     # 写作 / 引用 / 修订 skills
-├── configs/rubrics/            # rubric profiles
-├── templates/                  # 实验模板
-├── results/                    # 运行结果（git-ignored）
-└── tests/                      # 测试套件
+├── launch_user_entry.py
+├── launch_mvp_workflow.py
+├── launch_scientist.py
+├── launch_template_migration.py
+├── engine/
+│   ├── llm.py
+│   ├── mvp_workflow.py
+│   ├── perform_writeup.py
+│   ├── template_migration.py
+│   └── workspace_config.py
+├── frontend/
+│   ├── server.py
+│   ├── app.js
+│   └── process_manager.py
+├── templates/
+│   └── paper_writer/
+├── docs/images/
+├── agents/
+└── tests/
 ```
-
-## 关键环境变量
-
-| 变量 | 用途 |
-|---|---|
-| `ANTHROPIC_API_KEY` | Anthropic 原生协议 |
-| `OPENAI_API_KEY` / `OPENAI_BASE_URL` | OpenAI 兼容端点 |
-| `OPENALEX_MAIL_ADDRESS` | OpenAlex 文献检索（礼貌池访问） |
-| `S2_API_KEY` | Semantic Scholar API（可选） |
-| `WRITEUP_CITE_ROUNDS` | 引用轮数（默认 4） |
-| `WRITEUP_LATEX_FIX_ROUNDS` | LaTeX 修错轮数（默认 2） |
-| `MPLBACKEND=Agg` | macOS 无头 matplotlib |
-| `PAPERFORGE_ALLOW_SYSTEM_PYTHON=1` | 跳过 venv 检查 |
-
-## MVP 阶段说明
-
-| 阶段 | 功能 |
-|---|---|
-| `bootstrap` | 创建 workspace、初始化 notes、文献检索、基线实验 |
-| `feedback` | 读取上传结果、更新 notes、初版写作 |
-| `optimize` | 多轮实验迭代（aider 代码 Agent） |
-| `refine` | LaTeX 精修 + 降重 + 引用补全 |
-| `cloud` | 上传至远程 GPU 训练、下载结果 |
-| `all` | 依次执行 bootstrap → feedback → optimize → refine |
 
 ## 测试
 
-当前定向回归命令：
+发布前推荐验证：
 
 ```bash
 source .venv311/bin/activate
-python -m pytest tests/test_idea_pipeline.py tests/test_research_partner_pipeline.py tests/test_agent_bridges.py -q
+python -m pytest \
+  tests/test_perform_writeup.py \
+  tests/test_template_migration.py \
+  tests/test_agent_bridges.py \
+  tests/test_research_partner_pipeline.py \
+  tests/test_frontend_process_manager.py \
+  tests/test_frontend_api.py \
+  tests/test_server_security.py \
+  -q
 ```
 
-当前结果：`52 passed`。
+当前本地结果：`98 passed`
 
-## 使用限制
+同时建议再跑：
 
-- 禁止商用
-- 仅限个人、学术研究、非营利教育使用
-- 禁止用于 surveillance、deceptive media、未授权医疗/犯罪预测等场景
-- 使用本工具生成的论文必须在显著位置声明 AI 辅助生成
+```bash
+node --check frontend/app.js
+python frontend/server.py
+```
 
-详见 `LICENSE`。
+## 当前边界
+
+- 这版只支持 **LaTeX 主线**，不支持 Word/docx
+- 模板迁移 v1 只覆盖：
+  - `ieee_tii`
+  - `cjc`
+  - 或带 `paperforge_template.json` 的自定义模板
+- `Pause / Resume` 采用 POSIX 进程组信号，面向 macOS/Linux
+- 前端通过浏览器工作台操作，不再维护旧的 `frontend.console` 只读模式
+
+## 许可证
+
+详见 [LICENSE](LICENSE)

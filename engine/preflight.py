@@ -19,11 +19,6 @@ from typing import Dict, List, Optional, Tuple
 import yaml
 
 
-@classmethod
-def _noop(*a, **kw):
-    pass
-
-
 class PreflightResult:
     def __init__(self) -> None:
         self.passed: List[str] = []

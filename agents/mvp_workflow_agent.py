@@ -29,7 +29,11 @@ class MvpWorkflowConfig:
     title: str = "Iterative Academic Paper Writing with Upload Feedback"
     description: str = "Generate draft, ingest uploaded server outputs, and iteratively refine the paper."
     engine: str = "openalex"
-    writeup_model: str = "claude-sonnet-4-6"
+    writeup_model: str = "gpt-5.4-xhigh"
+    gateway_profile: str | None = None
+    existing_draft: str | None = None
+    enforce_disclosure: bool | None = None
+    skip_chktex_fix: bool | None = None
     python_bin: str | None = None
     skip_writeup: bool = False
     skip_mvp_run: bool = False
@@ -115,7 +119,11 @@ class MvpWorkflowAgent:
                 )
             ),
             engine=str(kwargs.get("engine", "openalex")),
-            writeup_model=str(kwargs.get("writeup_model", "claude-sonnet-4-6")),
+            writeup_model=str(kwargs.get("writeup_model", "gpt-5.4-xhigh")),
+            gateway_profile=kwargs.get("gateway_profile"),
+            existing_draft=kwargs.get("existing_draft"),
+            enforce_disclosure=kwargs.get("enforce_disclosure"),
+            skip_chktex_fix=kwargs.get("skip_chktex_fix"),
             python_bin=kwargs.get("python_bin"),
             skip_writeup=bool(kwargs.get("skip_writeup", False)),
             skip_mvp_run=bool(kwargs.get("skip_mvp_run", False)),
@@ -149,6 +157,16 @@ class MvpWorkflowAgent:
         _append_option(command, "--description", cfg.description)
         _append_option(command, "--engine", cfg.engine)
         _append_option(command, "--writeup-model", cfg.writeup_model)
+        _append_option(command, "--gateway-profile", cfg.gateway_profile)
+        _append_option(command, "--existing-draft", cfg.existing_draft)
+        if cfg.enforce_disclosure is True:
+            command.append("--enforce-disclosure")
+        if cfg.enforce_disclosure is False:
+            command.append("--no-enforce-disclosure")
+        if cfg.skip_chktex_fix is True:
+            command.append("--skip-chktex-fix")
+        if cfg.skip_chktex_fix is False:
+            command.append("--no-skip-chktex-fix")
         _append_option(command, "--python-bin", cfg.python_bin)
         _append_option(command, "--bootstrap-run-index", cfg.bootstrap_run_index)
         _append_option(command, "--optimize-runs", cfg.optimize_runs)

@@ -288,7 +288,23 @@
     </style>
   </head>
   <body>
-    <main id="app"></main>
-    <script type="module" src="./app.js"></script>
+    <main id="app">
+      <div style="width:min(960px,calc(100vw - 32px));margin:40px auto;padding:24px;border:1px solid rgba(48,37,24,0.12);border-radius:18px;background:rgba(255,250,244,0.92);color:#675d52">
+        正在加载 PaperForge 前端…
+      </div>
+    </main>
+    <script>
+      window.addEventListener("error", function (event) {
+        var root = document.getElementById("app");
+        if (!root) return;
+        root.innerHTML =
+          '<div style="width:min(960px,calc(100vw - 32px));margin:40px auto;padding:24px;border:1px solid rgba(164,73,42,0.2);border-radius:18px;background:rgba(255,250,244,0.92)">' +
+          '<div style="font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#a4492a;margin-bottom:10px">frontend error</div>' +
+          '<h1 style="font-family:Iowan Old Style,Palatino Linotype,Georgia,serif;font-size:28px;margin:0 0 12px">页面脚本加载失败</h1>' +
+          '<div style="color:#675d52;line-height:1.7">' + String(event.message || "Unknown error") + '</div>' +
+          '</div>';
+      });
+    </script>
+    <script defer src="./app.js"></script>
   </body>
 </html>

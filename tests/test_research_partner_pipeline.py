@@ -122,7 +122,7 @@ class ResearchPartnerPipelineTest(unittest.TestCase):
 
         with patch(
             "engine.research_partner.critique_loop.create_client",
-            return_value=(object(), "claude-sonnet-4-6"),
+            return_value=(object(), "gpt-5.4-xhigh"),
         ) as client_mock, patch(
             "engine.research_partner.critique_loop.perform_review",
             return_value=llm_review,
@@ -132,12 +132,12 @@ class ResearchPartnerPipelineTest(unittest.TestCase):
                 CritiqueLoopConfig(
                     rubric_profile=rubric_profile,
                     review_mode="llm_committee",
-                    review_model="claude-sonnet-4-6",
+                    review_model="gpt-5.4-xhigh",
                     reviewer_count=3,
                 ),
             )
 
-        client_mock.assert_called_once_with("claude-sonnet-4-6")
+        client_mock.assert_called_once_with("gpt-5.4-xhigh")
         review_mock.assert_called_once()
         self.assertEqual(review_mock.call_args.kwargs["num_reviews_ensemble"], 3)
         self.assertEqual(result["scorecard"]["review_mode"], "llm_committee")
@@ -178,7 +178,7 @@ class ResearchPartnerPipelineTest(unittest.TestCase):
 
         with patch(
             "engine.research_partner.critique_loop.create_client",
-            return_value=(object(), "claude-sonnet-4-6"),
+            return_value=(object(), "gpt-5.4-xhigh"),
         ), patch(
             "engine.research_partner.critique_loop.perform_review",
             side_effect=RuntimeError("llm unavailable"),
@@ -188,7 +188,7 @@ class ResearchPartnerPipelineTest(unittest.TestCase):
                 CritiqueLoopConfig(
                     rubric_profile=rubric_profile,
                     review_mode="llm_committee",
-                    review_model="claude-sonnet-4-6",
+                    review_model="gpt-5.4-xhigh",
                 ),
             )
 
@@ -234,7 +234,7 @@ class ResearchPartnerPipelineTest(unittest.TestCase):
                 CritiqueLoopConfig(
                     rubric_profile=rubric_profile,
                     review_mode="llm_committee",
-                    review_model="claude-sonnet-4-6",
+                    review_model="gpt-5.4-xhigh",
                 ),
             )
 
