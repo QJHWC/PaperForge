@@ -2,6 +2,14 @@
 
 面向研究论文生成、实验驱动写作、现有成稿精修与模板迁移的自动化工作台。
 
+<p align="center">
+  <a href="https://linux.do" target="_blank">
+    <img src="https://img.shields.io/badge/LINUX-DO-FFB003?style=for-the-badge&logo=linux&logoColor=white" alt="LINUX DO" />
+  </a>
+</p>
+
+> ⚠️ 免责声明：本项目仅供学习与研究使用，不得用于任何商业用途。使用本项目所产生的一切后果由使用者自行承担。
+
 PaperForge 将文献检索、实验编排、LaTeX 写作、Proposal-first 收敛、浏览器前端控制台以及模板迁移整合为一套可脚本化流程。当前发布版聚焦于可直接运行、可点击操作、可查看历史记录的本地工作流体验。
 
 ## 当前主线
