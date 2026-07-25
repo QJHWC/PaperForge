@@ -27,7 +27,7 @@ class RubricProfile:
 
 
 def _default_rubrics_dir() -> Path:
-    return Path(__file__).resolve().parents[2] / "configs" / "rubrics"
+    return Path(__file__).resolve().parent / "rubrics"
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -28,8 +30,63 @@ from paperforge.compute import (
     SSHConfig,
     SSHSecurityError,
 )
+from paperforge.compute.base import CommandOutcome
+from paperforge.compute.ssh import _validate_windows_acl_payload
 from paperforge.models import ExecutionProfile
 from paperforge.policy import ExecutionPolicy, PolicyViolation
+
+
+def _secure_test_file(path: Path, *, mode: int) -> None:
+    if os.name != "nt":
+        path.chmod(mode)
+        return
+    username = os.environ.get("USERNAME", "").strip()
+    if not username:
+        raise RuntimeError("Windows test user is unavailable")
+    subprocess.run(
+        [
+            "icacls",
+            str(path),
+            "/inheritance:r",
+            "/grant:r",
+            f"{username}:(F)",
+            "*S-1-5-18:(F)",
+            "*S-1-5-32-544:(F)",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+class _SlurmWithoutAccountingRunner:
+    def __init__(self, *, squeue_return_code: int = 0, missing_sacct: bool = False) -> None:
+        self.squeue_return_code = squeue_return_code
+        self.missing_sacct = missing_sacct
+
+    def run(
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: str | Path | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout: int | None = None,
+    ) -> CommandOutcome:
+        del cwd, env, timeout
+        command = tuple(argv)
+        if command[0] == "squeue":
+            return CommandOutcome(self.squeue_return_code, "", "queue unavailable\n")
+        if command[0] == "sacct":
+            if self.missing_sacct:
+                raise FileNotFoundError("sacct")
+            return CommandOutcome(1, "", "Slurm accounting storage is disabled\n")
+        if command[:3] == ("scontrol", "show", "job"):
+            return CommandOutcome(
+                0,
+                "JobId=42 JobState=COMPLETED ExitCode=0:0\n",
+                "",
+            )
+        raise AssertionError(f"unexpected command: {command}")
 
 
 def _ssh_config(tmp_path: Path) -> SSHConfig:
@@ -38,9 +95,10 @@ def _ssh_config(tmp_path: Path) -> SSHConfig:
         "compute.example ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n",
         encoding="utf-8",
     )
+    _secure_test_file(known_hosts, mode=0o644)
     identity = tmp_path / "id_ed25519"
     identity.write_text("test-key-material", encoding="utf-8")
-    identity.chmod(0o600)
+    _secure_test_file(identity, mode=0o600)
     return SSHConfig(
         host="compute.example",
         user="paperforge",
@@ -143,6 +201,155 @@ def test_every_backend_plans_all_lifecycle_operations_by_default(
         ):
             assert not result.executed
             assert result.plan is not None
+
+
+@pytest.mark.parametrize(
+    ("squeue_return_code", "missing_sacct"),
+    [(0, False), (1, False), (0, True)],
+)
+def test_slurm_status_falls_back_when_accounting_is_disabled(
+    tmp_path: Path,
+    squeue_return_code: int,
+    missing_sacct: bool,
+) -> None:
+    backend = SlurmBackend(
+        SlurmConfig(),
+        runner=_SlurmWithoutAccountingRunner(
+            squeue_return_code=squeue_return_code,
+            missing_sacct=missing_sacct,
+        ),
+        policy=ExecutionPolicy(ExecutionProfile.FULL),
+        state_dir=tmp_path / "state",
+    )
+    backend.submit(
+        JobSpec(name="slurm-fallback", job_id="42", command=["true"]),
+    )
+
+    result = backend.status("42", execute=True)
+
+    assert result.status is JobStatus.SUCCEEDED
+    assert result.stdout == "COMPLETED"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("PENDING", JobStatus.QUEUED),
+        ("REQUEUED", JobStatus.QUEUED),
+        ("REQUEUE_HOLD", JobStatus.SUSPENDED),
+        ("RUNNING", JobStatus.RUNNING),
+        ("STAGE_OUT", JobStatus.RUNNING),
+        ("STOPPED", JobStatus.SUSPENDED),
+        ("COMPLETED", JobStatus.SUCCEEDED),
+        ("BOOT_FAIL", JobStatus.FAILED),
+        ("DEADLINE", JobStatus.FAILED),
+        ("LAUNCH_FAILED", JobStatus.FAILED),
+        ("REVOKED", JobStatus.CANCELLED),
+        ("CANCELLED+", JobStatus.CANCELLED),
+    ],
+)
+def test_slurm_maps_documented_scheduler_states(raw: str, expected: JobStatus) -> None:
+    assert SlurmBackend._map_status(raw) is expected
+
+
+def test_windows_acl_allows_read_only_known_hosts_access() -> None:
+    payload = {
+        "dacl_present": True,
+        "dacl_null": False,
+        "current": "S-1-5-21-1000",
+        "owner": "S-1-5-21-1000",
+        "rules": [
+            {
+                "sid": "S-1-5-21-1000",
+                "rights": 2032127,
+                "type": "Allow",
+                "propagation": "None",
+            },
+            {
+                "sid": "S-1-5-32-545",
+                "rights": 131209,
+                "type": "Allow",
+                "propagation": "None",
+            },
+        ],
+    }
+
+    _validate_windows_acl_payload(payload, label="known_hosts", private=False)
+
+
+@pytest.mark.parametrize("private", [False, True])
+def test_windows_acl_rejects_untrusted_writers(private: bool) -> None:
+    payload = {
+        "dacl_present": True,
+        "dacl_null": False,
+        "current": "S-1-5-21-1000",
+        "owner": "S-1-5-21-1000",
+        "rules": [
+            {
+                "sid": "S-1-5-32-545",
+                "rights": 278,
+                "type": "Allow",
+                "propagation": "None",
+            }
+        ],
+    }
+
+    with pytest.raises(SSHSecurityError, match="untrusted principal"):
+        _validate_windows_acl_payload(
+            payload,
+            label="identity file" if private else "known_hosts",
+            private=private,
+        )
+
+
+def test_windows_acl_rejects_untrusted_private_key_readers() -> None:
+    payload = {
+        "dacl_present": True,
+        "dacl_null": False,
+        "current": "S-1-5-21-1000",
+        "owner": "S-1-5-21-1000",
+        "rules": [
+            {
+                "sid": "S-1-5-32-545",
+                "rights": 131209,
+                "type": "Allow",
+                "propagation": "None",
+            }
+        ],
+    }
+
+    with pytest.raises(SSHSecurityError, match="untrusted principal"):
+        _validate_windows_acl_payload(
+            payload,
+            label="identity file",
+            private=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("dacl_present", "dacl_null"),
+    [
+        (False, False),
+        (True, True),
+    ],
+)
+def test_windows_acl_rejects_missing_or_null_dacl(
+    dacl_present: bool,
+    dacl_null: bool,
+) -> None:
+    payload = {
+        "dacl_present": dacl_present,
+        "dacl_null": dacl_null,
+        "current": "S-1-5-21-1000",
+        "owner": "S-1-5-21-1000",
+        "rules": [],
+    }
+    with pytest.raises(SSHSecurityError, match="unsafe Windows DACL"):
+        _validate_windows_acl_payload(
+            payload,
+            label="identity file",
+            private=True,
+        )
 
 
 def test_dry_run_plans_do_not_expose_environment_values(tmp_path: Path) -> None:
@@ -383,19 +590,21 @@ def test_ssh_contract_enforces_host_verification_and_private_identity(
 ) -> None:
     known_hosts = tmp_path / "known_hosts"
     known_hosts.write_text("host ssh-ed25519 fixture\n", encoding="utf-8")
+    _secure_test_file(known_hosts, mode=0o644)
     identity = tmp_path / "id_ed25519"
     identity.write_text("fixture", encoding="utf-8")
-    identity.chmod(0o644)
 
-    with pytest.raises(SSHSecurityError, match="permissions"):
-        SSHConfig(
-            host="compute.example",
-            user="paperforge",
-            identity_file=identity,
-            known_hosts_file=known_hosts,
-        )
+    if os.name != "nt":
+        identity.chmod(0o644)
+        with pytest.raises(SSHSecurityError, match="permissions"):
+            SSHConfig(
+                host="compute.example",
+                user="paperforge",
+                identity_file=identity,
+                known_hosts_file=known_hosts,
+            )
 
-    identity.chmod(0o600)
+    _secure_test_file(identity, mode=0o600)
     with pytest.raises(SSHSecurityError, match="host key"):
         SSHConfig(
             host="compute.example",

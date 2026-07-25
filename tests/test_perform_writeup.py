@@ -9,7 +9,20 @@ from engine.perform_writeup import (
     compile_latex,
     generate_latex,
     perform_writeup,
+    run_chktex,
 )
+
+
+def test_run_chktex_skips_when_executable_is_unavailable(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr("engine.perform_writeup.shutil.which", lambda _: None)
+
+    result = run_chktex(str(tmp_path), "template.tex")
+
+    assert result.errors == []
+    assert result.warnings == []
+    assert result.raw_output == "chktex is not installed; lint step skipped"
 
 
 def test_generate_latex_accepts_inline_thebibliography_without_references_bib(tmp_path, monkeypatch) -> None:

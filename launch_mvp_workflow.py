@@ -497,7 +497,7 @@ def _default_pipeline_root() -> str:
 
 
 def _check_latex_dependencies() -> bool:
-    required = ["pdflatex", "bibtex", "chktex"]
+    required = ["pdflatex", "bibtex"]
     missing = [name for name in required if shutil.which(name) is None]
     if missing:
         print(

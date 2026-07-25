@@ -14,6 +14,7 @@ from agents.coordinator import PaperForgeCoordinator
 from agents.mvp_workflow_agent import MvpWorkflowAgent
 from agents.scientist_workflow_agent import ScientistWorkflowAgent
 from agents.writeup_agent import WriteupAgent
+from launch_mvp_workflow import _check_latex_dependencies
 from launch_user_entry import (
     ROOT,
     _build_entry_cmd,
@@ -23,6 +24,14 @@ from launch_user_entry import (
     build_parser,
     main,
 )
+
+
+def test_mvp_latex_preflight_treats_chktex_as_optional() -> None:
+    def _which(name: str) -> str | None:
+        return None if name == "chktex" else f"/tools/{name}"
+
+    with patch("launch_mvp_workflow.shutil.which", side_effect=_which):
+        assert _check_latex_dependencies() is True
 
 
 def _completed_process(stdout: str = "", stderr: str = "", returncode: int = 0) -> SimpleNamespace:

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=75,<81", "wheel>=0.45,<1"]
+requires = ["setuptools>=77,<81", "wheel>=0.45,<1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,9 +8,13 @@ version = "3.0.0"
 description = "Evidence-first research, experiment and publication runtime"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
-license = {file = "LICENSE"}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{name = "PaperForge contributors"}]
-dependencies = []
+dependencies = [
+  "requests==2.32.5",
+  "pyyaml>=6.0,<7",
+]
 
 [project.optional-dependencies]
 writing = [
@@ -50,8 +54,44 @@ dev = [
 [project.scripts]
 paperforge = "paperforge.cli:main"
 
+[tool.setuptools]
+py-modules = [
+  "launch_mvp_workflow",
+  "launch_scientist",
+  "launch_template_migration",
+  "launch_user_entry",
+  "run_cloud_pipeline_cycle",
+  "sync_cloud_results_to_uploads",
+]
+
 [tool.setuptools.packages.find]
-include = ["paperforge*", "engine*", "agents*", "frontend*", "mcp_servers*", "skills*"]
+include = [
+  "agents*",
+  "engine*",
+  "frontend*",
+  "mcp_servers*",
+  "paperforge*",
+  "skills*",
+  "templates*",
+]
+
+[tool.setuptools.package-data]
+agents = ["schemas/*.json"]
+frontend = ["*.html", "*.js"]
+engine = [
+  "fewshot_examples/*.json",
+  "fewshot_examples/*.pdf",
+  "fewshot_examples/*.txt",
+]
+"engine.research_partner" = ["rubrics/*.yaml"]
+skills = [
+  "*/*.json",
+  "*/SKILL.md",
+  "research-writing-prompts/*.md",
+  "research-writing-prompts/agents/*.yaml",
+  "research-writing-prompts/references/*.md",
+]
+templates = ["paper_writer/latex/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

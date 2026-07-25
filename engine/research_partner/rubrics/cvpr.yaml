@@ -1,0 +1,13 @@
+name: cvpr
+approval_threshold: 0.72
+max_rounds: 3
+dimensions:
+  - name: novelty
+    weight: 0.4
+    description: Novel visual modeling contribution
+  - name: methodology
+    weight: 0.35
+    description: Architecture and evaluation rigor
+  - name: evidence_support
+    weight: 0.25
+    description: Empirical support quality

@@ -1,0 +1,16 @@
+name: journal_q2
+approval_threshold: 0.58
+max_rounds: 2
+dimensions:
+  - name: novelty
+    weight: 0.3
+    description: Contribution novelty
+  - name: methodology
+    weight: 0.3
+    description: Method and experiment rigor
+  - name: evidence_support
+    weight: 0.2
+    description: Evidence strength
+  - name: clarity
+    weight: 0.2
+    description: Communication clarity

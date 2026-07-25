@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
+import shutil
 import stat
+import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -27,6 +30,137 @@ _SECRET_UPLOAD_PATTERN = re.compile(
     r"(?:^|[._-])(?:credential|identity|private|secret|token|key)(?:[._-]|$)",
     re.IGNORECASE,
 )
+_WINDOWS_TRUSTED_CONTROL_SIDS = frozenset(
+    {
+        "S-1-5-18",
+        "S-1-5-32-544",
+    }
+)
+_WINDOWS_WRITE_MASK = (
+    0x10000000
+    | 0x40000000
+    | 0x00000002
+    | 0x00000004
+    | 0x00000010
+    | 0x00000100
+    | 0x00010000
+    | 0x00040000
+    | 0x00080000
+)
+_WINDOWS_SYNCHRONIZE = 0x00100000
+
+
+def _validate_windows_acl_payload(
+    payload: Mapping[str, Any],
+    *,
+    label: str,
+    private: bool,
+) -> None:
+    if payload.get("dacl_present") is not True or payload.get("dacl_null") is not False:
+        raise SSHSecurityError(f"{label} has an unsafe Windows DACL")
+    current = str(payload.get("current", "")).strip()
+    owner = str(payload.get("owner", "")).strip()
+    trusted = _WINDOWS_TRUSTED_CONTROL_SIDS | {current}
+    if not current or owner not in trusted:
+        raise SSHSecurityError(f"{label} has an untrusted Windows owner")
+
+    rules = payload.get("rules", [])
+    if isinstance(rules, Mapping):
+        rules = [rules]
+    if not isinstance(rules, list):
+        raise SSHSecurityError(f"{label} has an unreadable Windows ACL")
+    for item in rules:
+        if not isinstance(item, Mapping):
+            raise SSHSecurityError(f"{label} has an unreadable Windows ACL")
+        if str(item.get("type", "")).casefold() != "allow":
+            continue
+        if "inheritonly" in str(item.get("propagation", "")).replace(" ", "").casefold():
+            continue
+        sid = str(item.get("sid", "")).strip()
+        try:
+            rights = int(item.get("rights", 0)) & 0xFFFFFFFF
+        except (TypeError, ValueError) as exc:
+            raise SSHSecurityError(f"{label} has an unreadable Windows ACL") from exc
+        if sid in trusted:
+            continue
+        effective = rights & ~_WINDOWS_SYNCHRONIZE
+        if private and effective:
+            raise SSHSecurityError(
+                f"{label} Windows ACL permits access by an untrusted principal"
+            )
+        if not private and rights & _WINDOWS_WRITE_MASK:
+            raise SSHSecurityError(
+                f"{label} Windows ACL permits writes by an untrusted principal"
+            )
+
+
+def _validate_windows_acl(path: Path, *, label: str, private: bool) -> None:
+    powershell = (
+        shutil.which("powershell.exe")
+        or shutil.which("pwsh.exe")
+        or shutil.which("powershell")
+        or shutil.which("pwsh")
+    )
+    if powershell is None:
+        raise SSHSecurityError(f"{label} Windows ACL cannot be verified")
+    script = r"""
+$ErrorActionPreference = "Stop"
+$acl = Get-Acl -LiteralPath $args[0]
+$descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new(
+    $acl.GetSecurityDescriptorBinaryForm(),
+    0
+)
+$daclPresent = (
+    $descriptor.ControlFlags -band
+    [System.Security.AccessControl.ControlFlags]::DiscretionaryAclPresent
+) -ne 0
+$current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$owner = ([System.Security.Principal.NTAccount]$acl.Owner).Translate(
+    [System.Security.Principal.SecurityIdentifier]
+).Value
+$rules = @($acl.Access | ForEach-Object {
+    [PSCustomObject]@{
+        sid = $_.IdentityReference.Translate(
+            [System.Security.Principal.SecurityIdentifier]
+        ).Value
+        rights = [Int64]$_.FileSystemRights
+        type = $_.AccessControlType.ToString()
+        propagation = $_.PropagationFlags.ToString()
+    }
+})
+[PSCustomObject]@{
+    dacl_present = $daclPresent
+    dacl_null = $null -eq $descriptor.DiscretionaryAcl
+    current = $current
+    owner = $owner
+    rules = $rules
+} | ConvertTo-Json -Compress -Depth 4
+"""
+    completed = subprocess.run(
+        [
+            powershell,
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise SSHSecurityError(f"{label} Windows ACL cannot be verified")
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise SSHSecurityError(f"{label} Windows ACL cannot be verified") from exc
+    if not isinstance(payload, Mapping):
+        raise SSHSecurityError(f"{label} Windows ACL cannot be verified")
+    _validate_windows_acl_payload(payload, label=label, private=private)
 
 
 def _validate_regular_file(
@@ -43,6 +177,9 @@ def _validate_regular_file(
         raise SSHSecurityError(f"{label} file does not exist: {resolved}")
     if resolved.stat().st_size == 0:
         raise SSHSecurityError(f"{label} file cannot be empty")
+    if os.name == "nt":
+        _validate_windows_acl(resolved, label=label, private=private)
+        return resolved
     mode = stat.S_IMODE(resolved.stat().st_mode)
     if mode & stat.S_IWGRP or mode & stat.S_IWOTH:
         raise SSHSecurityError(f"{label} has unsafe write permissions: {mode:o}")

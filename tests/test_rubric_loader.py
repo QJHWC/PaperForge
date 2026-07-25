@@ -6,6 +6,14 @@ from pathlib import Path
 
 
 class RubricLoaderTest(unittest.TestCase):
+    def test_packaged_default_rubric_is_available(self) -> None:
+        from engine.research_partner.rubric_loader import load_rubric_profile
+
+        profile = load_rubric_profile("cvpr")
+
+        self.assertEqual(profile.name, "cvpr")
+        self.assertEqual(profile.max_rounds, 3)
+
     def test_loads_valid_venue_yaml_as_typed_profile(self) -> None:
         from engine.research_partner.rubric_loader import RubricProfile, load_rubric_profile
 

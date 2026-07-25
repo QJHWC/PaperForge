@@ -526,6 +526,12 @@ class ChktexResult:
 
 
 def run_chktex(latex_dir: str, tex_file: str) -> ChktexResult:
+    if shutil.which("chktex") is None:
+        return ChktexResult(
+            errors=[],
+            warnings=[],
+            raw_output="chktex is not installed; lint step skipped",
+        )
     proc = subprocess.run(
         ["chktex", tex_file, "-q", "-v0", "-f", "%k|%n|%l|%c|%m\n"],
         cwd=latex_dir,

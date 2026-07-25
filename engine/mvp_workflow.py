@@ -11,6 +11,7 @@ from engine.generate_ideas import search_for_papers
 
 RUN_DIR_PATTERN = re.compile(r"run_(\d+)$")
 FIGURE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".pdf", ".svg"}
+TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 DEFAULT_TEMPLATE_REQUIRED_FILES = [
     "latex/template.tex",
     "latex/references.bib",
@@ -29,12 +30,17 @@ def validate_template_integrity(
     experiment: str,
     required_files: list[str] | None = None,
 ) -> str:
-    template_dir = osp.join("templates", experiment)
-    if not osp.isdir(template_dir):
+    relative = Path(experiment)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("template name must be a traversal-free relative path")
+    external = (Path.cwd() / "templates" / relative).resolve()
+    packaged = (TEMPLATES_DIR / relative).resolve()
+    template_dir = external if external.is_dir() else packaged
+    if not template_dir.is_dir():
         raise FileNotFoundError(f"Template not found: {template_dir}")
 
     requirements = list(required_files or DEFAULT_TEMPLATE_REQUIRED_FILES)
-    missing = [rel for rel in requirements if not osp.exists(osp.join(template_dir, rel))]
+    missing = [rel for rel in requirements if not (template_dir / rel).exists()]
     if missing:
         missing_text = ", ".join(missing)
         raise FileNotFoundError(
@@ -42,7 +48,7 @@ def validate_template_integrity(
             f"Please restore them under `{template_dir}` "
             f"or switch template with `--experiment paper_writer`."
         )
-    return template_dir
+    return str(template_dir)
 
 
 def create_workspace_from_template(experiment: str, idea_name: str) -> str:

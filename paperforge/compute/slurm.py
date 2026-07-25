@@ -155,16 +155,33 @@ class SlurmBackend(ComputeBackend):
         mapping = {
             "PENDING": JobStatus.QUEUED,
             "CONFIGURING": JobStatus.QUEUED,
+            "EXPEDITING": JobStatus.QUEUED,
+            "POWER_UP_NODE": JobStatus.QUEUED,
+            "REQUEUED": JobStatus.QUEUED,
+            "REQUEUE_FED": JobStatus.QUEUED,
             "RUNNING": JobStatus.RUNNING,
             "COMPLETING": JobStatus.RUNNING,
+            "RESIZING": JobStatus.RUNNING,
+            "SIGNALING": JobStatus.RUNNING,
+            "STAGE_OUT": JobStatus.RUNNING,
+            "UPDATE_DB": JobStatus.RUNNING,
             "SUSPENDED": JobStatus.SUSPENDED,
+            "REQUEUE_HOLD": JobStatus.SUSPENDED,
+            "RESV_DEL_HOLD": JobStatus.SUSPENDED,
+            "SPECIAL_EXIT": JobStatus.SUSPENDED,
+            "STOPPED": JobStatus.SUSPENDED,
             "COMPLETED": JobStatus.SUCCEEDED,
+            "BOOT_FAIL": JobStatus.FAILED,
+            "DEADLINE": JobStatus.FAILED,
             "FAILED": JobStatus.FAILED,
+            "LAUNCH_FAILED": JobStatus.FAILED,
             "TIMEOUT": JobStatus.FAILED,
             "OUT_OF_MEMORY": JobStatus.FAILED,
             "NODE_FAIL": JobStatus.FAILED,
+            "RECONFIG_FAIL": JobStatus.FAILED,
             "CANCELLED": JobStatus.CANCELLED,
             "PREEMPTED": JobStatus.CANCELLED,
+            "REVOKED": JobStatus.CANCELLED,
         }
         return mapping.get(normalized, JobStatus.UNKNOWN)
 
@@ -187,10 +204,10 @@ class SlurmBackend(ComputeBackend):
         if not execute:
             return plan
         outcome = self._run(spec, argv, timeout=60)
-        raw = outcome.stdout.strip()
+        raw = outcome.stdout.strip() if outcome.return_code == 0 else ""
         stderr = outcome.stderr
         return_code = outcome.return_code
-        if outcome.return_code == 0 and not raw:
+        if not raw:
             accounting_argv = (
                 self.config.sacct_executable,
                 "--noheader",
@@ -199,10 +216,32 @@ class SlurmBackend(ComputeBackend):
                 "--format=State",
                 "--starttime=1970-01-01",
             )
-            accounting = self._run(spec, accounting_argv, timeout=60)
-            raw = accounting.stdout.strip().splitlines()[0] if accounting.stdout.strip() else ""
-            stderr += accounting.stderr
-            return_code = accounting.return_code
+            try:
+                accounting = self._run(spec, accounting_argv, timeout=60)
+            except FileNotFoundError as exc:
+                accounting = None
+                stderr += f"{exc}\n"
+            if accounting is not None:
+                raw = (
+                    accounting.stdout.strip().splitlines()[0]
+                    if accounting.return_code == 0 and accounting.stdout.strip()
+                    else ""
+                )
+                stderr += accounting.stderr
+                return_code = accounting.return_code
+            if not raw:
+                control_argv = (
+                    self.config.scontrol_executable,
+                    "show",
+                    "job",
+                    scheduler_id,
+                    "--oneliner",
+                )
+                control = self._run(spec, control_argv, timeout=60)
+                match = re.search(r"(?:^|\s)JobState=([A-Z_]+)", control.stdout)
+                raw = match.group(1) if match else ""
+                stderr += control.stderr
+                return_code = control.return_code
         status = self._map_status(raw) if return_code == 0 else JobStatus.UNKNOWN
         previous = self._results.get(job_id)
         result = JobResult(

@@ -27,3 +27,9 @@ jobs:
       - run: python -m pytest -q
       - run: python -m ruff check .
       - run: python -m mypy paperforge
+      - if: matrix.python == '3.11'
+        run: python -m pip install build==1.2.2.post1
+      - if: matrix.python == '3.11'
+        run: python -m build
+      - if: matrix.python == '3.11'
+        run: python tools/verify_wheel.py dist/paperforge_research_os-3.0.0-py3-none-any.whl

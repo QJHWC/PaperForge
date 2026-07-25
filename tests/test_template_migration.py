@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from engine.mvp_workflow import validate_template_integrity
 from engine.template_migration import (
     import_source_draft,
     import_template_directory,
@@ -10,6 +11,26 @@ from engine.template_migration import (
     restore_recycled_artifact,
     run_template_migration,
 )
+
+
+def test_legacy_custom_template_prefers_current_workspace(
+    tmp_path, monkeypatch
+) -> None:
+    template = tmp_path / "templates" / "custom" / "latex"
+    template.mkdir(parents=True)
+    for name in (
+        "template.tex",
+        "references.bib",
+        "ieeecolor.cls",
+        "generic.sty",
+        "TII.eps",
+    ):
+        (template / name).write_text("fixture", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    resolved = validate_template_integrity("custom")
+
+    assert Path(resolved) == template.parent
 
 
 def _source_tex() -> bytes:
