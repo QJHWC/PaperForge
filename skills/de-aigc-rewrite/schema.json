@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["text"],
+  "properties": {
+    "text": { "type": "string" },
+    "style_goal": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "required": ["papers"],
+  "properties": {
+    "papers": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "draft_context": { "type": ["string", "null"] },
+    "current_description": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+}

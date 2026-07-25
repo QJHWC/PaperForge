@@ -1,0 +1,9 @@
+{
+  "section_name": "Introduction",
+  "section_text": "This paper introduces a writing agent.  It also keeps the workflow stable.",
+  "tips": "Tighten the argument and remove redundant phrasing.",
+  "error_list": [
+    "double spaces"
+  ],
+  "style_policy": "compact"
+}

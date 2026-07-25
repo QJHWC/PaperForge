@@ -1,0 +1,9 @@
+{
+  "latex_text": "\\section{Result}\n    We report the final metrics here.\n",
+  "fixes_applied": [
+    "normalized tabs to spaces"
+  ],
+  "diagnostics": [
+    "tab character found"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "required": ["mode"],
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["scientist", "mvp", "writeup", "research_partner"]
+    },
+    "execute": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,5 @@
+ID,Phase,Title,Section_Path,Description,Source_Policy,Target_Citations,Visualization,Acceptance,Status,Verified_Citations,Depends_On,Must_Verify,Notes
+R1,Research,Research snapshot,N/A,Collect the initial spine papers and scope constraints,N/A,0,N/A,Snapshot covers scope and identifies 10-20 seed papers,TODO,0,,,Duplicate/split/insert rows as needed; add new IDs when scope grows; re-validate
+W1,Writing,Introduction,Introduction,Draft the introduction section per the approved outline,core,8,Concept map,Section drafted with citations and no unresolved TODO markers,TODO,0,R1,,Duplicate/split/insert per section; add new IDs when scope grows; re-validate
+RF1,Refinement,Rhythm refinement,N/A,Apply latex-rhythm-refiner skill section-by-section after all W issues DONE,N/A,0,N/A,All sections refined and citations preserved,TODO,0,W1,,Run only after all writing issues are DONE
+Q1,QA,Citation and policy audit,N/A,Verify citations source policy and compilation status,N/A,0,N/A,All checks pass and outstanding issues are documented,TODO,0,RF1,yes,Duplicate/split/insert per QA item; add new IDs when scope grows; re-validate

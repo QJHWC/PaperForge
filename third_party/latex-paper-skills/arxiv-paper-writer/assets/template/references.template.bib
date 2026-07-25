@@ -1,0 +1,199 @@
+% REFERENCES.TEMPLATE.BIB
+% This file contains examples of BibTeX entries following Google Scholar and arXiv best practices
+% Each entry has a unique citationKey that you reference in your .tex file using \cite{citationKey}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% JOURNAL ARTICLES
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Required fields: author, title, journal, year
+% Optional fields: volume, number, pages, month, doi, url
+
+@article{author2023paper,
+  title     = {Title of the Journal Paper},
+  author    = {Author, First Name and Second Author, Name and Third Author, Name},
+  journal   = {Journal Name},
+  volume    = {42},
+  number    = {3},
+  pages     = {123--145},
+  year      = {2023},
+  month     = {jan},
+  doi       = {10.xxxx/xxxxx},
+  url       = {https://doi.org/10.xxxx/xxxxx}
+}
+
+% Example of a journal article with many authors (use 'and' between authors)
+% Use "and others" for more than 7 authors.
+@article{smith2022deep,
+  title     = {Deep Learning Approaches for Natural Language Processing},
+  author    = {Smith, John and Johnson, Emily and Williams, Michael and Brown, Sarah and Davis, Robert and Miller, Jennifer and Wilson, David and others},
+  journal   = {IEEE Transactions on Neural Networks and Learning Systems},
+  volume    = {33},
+  number    = {5},
+  pages     = {1812--1830},
+  year      = {2022},
+  doi       = {10.1109/TNNLS.2022.12345}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% CONFERENCE PAPERS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Required fields: author, title, booktitle, year
+% Optional fields: editor, volume, number, series, pages, address, month, organization, publisher, doi, url
+
+@inproceedings{jones2023transformer,
+  title        = {Transformer Architectures for Multi-Modal Learning},
+  author       = {Jones, Alice and Liu, Wei and Garcia, Carlos},
+  booktitle    = {Proceedings of the 40th International Conference on Machine Learning},
+  series       = {ICML'23},
+  pages        = {2245--2253},
+  year         = {2023},
+  address      = {Honolulu, Hawaii},
+  month        = {jul},
+  publisher    = {PMLR},
+  volume       = {202},
+  doi          = {10.xxxx/xxxxx}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% PREPRINTS (arXiv, bioRxiv, etc.)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Required fields: author, title, year, eprint number
+% Optional fields: month, url, doi
+% Use the correct arXiv identifier in the journal field below.
+
+@article{zhang2024large,
+  title         = {Large Language Models for Robotic Control: A Comprehensive Survey},
+  author        = {Zhang, Wei and Anderson, Thomas and Kumar, Priya and Chen, Li},
+  journal       = {arXiv preprint arXiv:2401.12345},
+  year          = {2024},
+  eprint        = {2401.12345},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.AI},
+  url           = {https://arxiv.org/abs/2401.12345}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% BOOKS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Required fields: author/editor, title, publisher, year
+% Optional fields: volume, series, address, edition, month, isbn, doi, url
+
+@book{goodfellow2016deep,
+  title     = {Deep Learning},
+  author    = {Goodfellow, Ian and Bengio, Yoshua and Courville, Aaron},
+  publisher = {MIT Press},
+  year      = {2016},
+  address   = {Cambridge, MA},
+  isbn      = {978-0262035613},
+  url       = {https://www.deeplearningbook.org/}
+}
+
+% Book with editors instead of authors
+@book{bishop2006pattern,
+  title     = {Pattern Recognition and Machine Learning},
+  editor    = {Bishop, Christopher M.},
+  publisher = {Springer},
+  year      = {2006},
+  isbn      = {978-0387310732}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% BOOK CHAPTERS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Required fields: author, title, booktitle, publisher, year
+% Optional fields: editor, chapter, pages, address, edition, month, isbn, doi, url
+
+@incollection{miller2022attention,
+  title     = {Attention Mechanisms in Deep Learning},
+  author    = {Miller, Samantha and Wilson, James},
+  booktitle = {Handbook of Deep Learning Applications},
+  editor    = {Johnson, Robert and Davis, Emma},
+  chapter   = {8},
+  pages     = {213--248},
+  publisher = {Springer},
+  year      = {2022},
+  address   = {New York, NY},
+  doi       = {10.xxxx/xxxxx}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% TECHNICAL REPORTS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Required fields: author, title, institution, year
+% Optional fields: type, number, address, month, doi, url
+
+@techreport{wang2023foundation,
+  title       = {Foundation Models for Computer Vision: A Comprehensive Analysis},
+  author      = {Wang, Hua and Thompson, John and Patel, Neha},
+  institution = {Stanford University},
+  number      = {STAN-CS-TR-2023-01},
+  year        = {2023},
+  address     = {Stanford, CA},
+  month       = {mar},
+  url         = {https://cs.stanford.edu/reports/STAN-CS-TR-2023-01.pdf}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% THESES
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Required fields: author, title, school, year
+% Optional fields: type, address, month, doi, url
+
+@phdthesis{chen2022reinforcement,
+  title  = {Reinforcement Learning Approaches to Human-AI Collaboration},
+  author = {Chen, Mei},
+  school = {Massachusetts Institute of Technology},
+  year   = {2022},
+  type   = {PhD Dissertation},
+  address = {Cambridge, MA},
+  month  = {may},
+  url    = {https://dspace.mit.edu/handle/xxxx}
+}
+
+% Master's thesis example
+@mastersthesis{smith2023generative,
+  title  = {Generative Models for Scientific Discovery},
+  author = {Smith, Robert},
+  school = {Stanford University},
+  year   = {2023},
+  address = {Stanford, CA},
+  month  = {jun}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% MISC (for websites, software, datasets, etc.)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Required fields: author/title
+% Optional fields: howpublished, month, year, note, url
+
+@misc{huggingface2023transformers,
+  title        = {Transformers: State-of-the-Art Natural Language Processing},
+  author       = {Wolf, Thomas and Debut, Lysandre and Sanh, Victor and Chaumond, Julien and Delangue, Clement and Moi, Anthony and Cistac, Perric and others},
+  howpublished = {GitHub repository},
+  year         = {2023},
+  url          = {https://github.com/huggingface/transformers},
+  note         = {Accessed: 2023-12-15}
+}
+
+% Dataset citation
+@misc{imagenet2009,
+  author       = {Deng, Jia and Dong, Wei and Socher, Richard and Li, Li-Jia and Li, Kai and Fei-Fei, Li},
+  title        = {ImageNet: A Large-Scale Hierarchical Image Database},
+  howpublished = {Conference on Computer Vision and Pattern Recognition (CVPR)},
+  year         = {2009},
+  url          = {http://www.image-net.org/}
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% TIPS FOR BIBTEXT ENTRIES
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 1. Always use consistent citation keys (e.g., firstauthorYEARfirstword)
+% 2. Include DOIs and URLs whenever available
+% 3. Use proper capitalization in titles (BibTeX will handle case conversion)
+% 4. For author names, use format: "Last Name, First Name"
+% 5. Separate multiple authors with "and"
+% 6. Use curly braces {} to protect capitalization, e.g., {CNN}, {BERT}
+% 7. For conference papers, include the full name of the conference
+% 8. For arXiv papers, include both the arXiv identifier and proper classification
+% 9. Month fields should use three-letter abbreviations: jan, feb, mar, etc.
+% 10. The "note" field is useful for additional information 

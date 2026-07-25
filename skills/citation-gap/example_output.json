@@ -1,0 +1,4 @@
+{
+  "Description": "补齐与以下陈述最相关的引用: Our staged workflow relies on checkpoint-aware citation repair, but related systems rarely expose this behavior as a stable contract.",
+  "Query": "Our staged workflow relies on checkpoint-aware citation repair, but related"
+}

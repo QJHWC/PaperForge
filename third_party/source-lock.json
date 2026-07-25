@@ -1,0 +1,40 @@
+{
+  "schema": "paperforge.third-party-lock/v1",
+  "sources": [
+    {
+      "name": "latex-paper-skills",
+      "url": "https://github.com/yunshenwuchuxun/latex-paper-skills",
+      "commit": "d0f106108cb09e448604a56ce973d35b340cf497",
+      "tree": "fbf696388ff75174093347b5191e140b9ff328f7",
+      "git_archive_sha256": "92c848b610dce7eaf9fe25f33e35e3af9e3d99d92d9a51c7ced8aa8702a39482",
+      "license": "MIT",
+      "vendored_subset": "third_party/latex-paper-skills",
+      "vendored_checksums": "third_party/latex-paper-skills/SHA256SUMS"
+    },
+    {
+      "name": "cvpr-author-kit",
+      "url": "https://github.com/cvpr-org/author-kit",
+      "commit": "291758547e923160eb4d37079b7b9f0dfce82355",
+      "tree": "bada7af3a66da84fd610948fd72ce5dd01fb3cc2",
+      "git_archive_sha256": "72df21fe120ab08c59980bc9461c6cafc427149e6400684749e731086efce5d6",
+      "license": "NO_LICENSE_FILE_AT_PIN",
+      "distribution": "not-vendored-user-supplied-template"
+    },
+    {
+      "name": "PaperFit",
+      "url": "https://arxiv.org/abs/2605.10341v1",
+      "version": "arXiv:2605.10341v1",
+      "pdf_sha256": "bb9d9d9d60290bfd0dcd16f66bf1f02a699c7ca0ea7f648ac23018b84b48edca",
+      "distribution": "reference-only-not-vendored"
+    },
+    {
+      "name": "MambaIR-GPPNN",
+      "url": "https://github.com/QJHWC/MambaIR-GPPNN",
+      "commit": "5e24e22c0f726fa73fa924afb1d1d186ca677b7b",
+      "tree": "3c6829c229b57effa8965d066b1314d2f83b070f",
+      "git_archive_sha256": "5ba4908b9cc866df87e1dec9940e0d5ae2d9f04eeda22bcbd9225747511dfc75",
+      "license": "MIT with Apache-2.0 adapted components",
+      "distribution": "separate-workspace-bundle"
+    }
+  ]
+}

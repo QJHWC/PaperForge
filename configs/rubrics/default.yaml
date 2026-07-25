@@ -1,0 +1,13 @@
+name: default
+approval_threshold: 0.6
+max_rounds: 2
+dimensions:
+  - name: novelty
+    weight: 0.34
+    description: Novel contribution strength
+  - name: methodology
+    weight: 0.33
+    description: Technical soundness and design quality
+  - name: evidence_support
+    weight: 0.33
+    description: Evidence coverage and traceability

@@ -1,0 +1,43 @@
+{
+  "type": "object",
+  "required": ["phase", "experiment"],
+  "properties": {
+    "phase": {
+      "type": "string",
+      "enum": ["bootstrap", "feedback", "optimize", "refine", "cloud", "all"]
+    },
+    "experiment": { "type": "string" },
+    "run_dir": { "type": ["string", "null"] },
+    "idea_name": { "type": "string" },
+    "title": { "type": "string" },
+    "description": { "type": "string" },
+    "engine": { "type": "string", "enum": ["openalex", "semanticscholar"] },
+    "writeup_model": { "type": "string" },
+    "gateway_profile": { "type": ["string", "null"], "enum": ["safe", "full", null] },
+    "existing_draft": { "type": ["string", "null"] },
+    "skip_chktex_fix": { "type": ["boolean", "null"] },
+    "python_bin": { "type": ["string", "null"] },
+    "skip_writeup": { "type": "boolean", "default": false },
+    "skip_mvp_run": { "type": "boolean", "default": false },
+    "bootstrap_run_index": { "type": "integer", "minimum": 1 },
+    "optimize_runs": { "type": "integer", "minimum": 0 },
+    "refine_profile": { "type": "string", "enum": ["fast", "balanced", "deep"] },
+    "refresh_literature": { "type": "boolean", "default": false },
+    "literature_top_k": { "type": "integer", "minimum": 1 },
+    "rubric_profile": { "type": "string", "enum": ["default", "cvpr", "journal_q2"] },
+    "evidence_files": { "type": "array", "items": { "type": "string" } },
+    "run_cloud_cycle": { "type": "boolean", "default": false },
+    "cloud_run_dir": { "type": ["string", "null"] },
+    "pipeline_root": { "type": ["string", "null"] },
+    "pipeline_config": { "type": ["string", "null"] },
+    "pipeline_run_name": { "type": "string" },
+    "pipeline_mode": { "type": "string", "enum": ["auto", "real", "sim"] },
+    "pipeline_hardware_profile": { "type": ["string", "null"] },
+    "pipeline_device": { "type": ["string", "null"] },
+    "remote_config": { "type": ["string", "null"] },
+    "cloud_skip_run": { "type": "boolean", "default": false },
+    "cloud_skip_sync": { "type": "boolean", "default": false },
+    "execute": { "type": "boolean", "default": false }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,161 @@
+"""针对 frontend/server.py 路径穿越与 CORS 修复的安全回归测试。"""
+from __future__ import annotations
+
+import json
+import shutil
+import sys
+import tempfile
+import threading
+import unittest
+from http.client import HTTPConnection
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from http.server import HTTPServer
+
+from frontend.server import RESULTS_DIR, Handler
+from frontend.server import ROOT as SERVER_ROOT
+
+
+def _start_server(host: str = "127.0.0.1", port: int = 0) -> tuple[HTTPServer, int]:
+    """启动一个绑定随机端口的测试服务器，返回 (server, port)。"""
+    server = HTTPServer((host, port), Handler)
+    actual_port = server.server_address[1]
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    return server, actual_port
+
+
+class TestPathTraversalWorkspace(unittest.TestCase):
+    """验证 /api/workspace/ 路径穿越防护。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.port = _start_server()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def _get(self, path: str):
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", path)
+        resp = conn.getresponse()
+        body = resp.read()
+        conn.close()
+        return resp.status, body
+
+    def test_path_traversal_dotdot_blocked(self):
+        """../../etc/passwd 形式的穿越请求应返回 403。"""
+        status, _ = self._get("/api/workspace/../../etc")
+        self.assertEqual(status, 403)
+
+    def test_absolute_path_outside_results_blocked(self):
+        """URL 编码的 %2Ftmp 被 urlparse 保留为字面量，拼接在 RESULTS_DIR 下，
+        不存在则返回 404（而非意外访问真实 /tmp），说明路径边界未被突破。"""
+        status, _ = self._get("/api/workspace/%2Ftmp")
+        # 404 表示路径不存在于 results/ 内，403 也可接受——重要的是不返回 200
+        self.assertIn(status, (403, 404))
+
+    def test_valid_nonexistent_workspace_returns_404(self):
+        """results/ 内不存在的路径应返回 404，而非 403 或 500。"""
+        status, body = self._get("/api/workspace/nonexistent_experiment/run_1")
+        self.assertEqual(status, 404)
+        data = json.loads(body)
+        self.assertIn("error", data)
+
+    def test_history_path_traversal_blocked(self):
+        status, _ = self._get("/api/workspace/../../etc/history")
+        self.assertEqual(status, 403)
+
+
+class TestPathTraversalStaticFiles(unittest.TestCase):
+    """验证静态文件处理器路径穿越防护。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.port = _start_server()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def _get(self, path: str):
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", path)
+        resp = conn.getresponse()
+        body = resp.read()
+        conn.close()
+        return resp.status, body
+
+    def test_dotdot_static_file_blocked(self):
+        """尝试访问前端目录之外的文件应返回 404（路径不存在于 FRONTEND_DIR 内）。"""
+        # 路径解析后超出 FRONTEND_DIR，应被拦截（返回 404）
+        status, _ = self._get("/../engine/perform_writeup.py")
+        self.assertNotEqual(status, 200)
+
+    def test_results_file_path_traversal_blocked(self):
+        status, _ = self._get("/files/results/../../etc/passwd")
+        self.assertIn(status, (403, 404))
+
+    def test_untrusted_html_artifact_is_forced_to_download(self):
+        RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        artifact_dir = Path(tempfile.mkdtemp(prefix="security-", dir=RESULTS_DIR))
+        try:
+            artifact = artifact_dir / "report.html"
+            artifact.write_text("<script>alert(1)</script>", encoding="utf-8")
+            relative = artifact.relative_to(RESULTS_DIR).as_posix()
+            conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+            conn.request("GET", f"/files/results/{relative}")
+            resp = conn.getresponse()
+            resp.read()
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(
+                resp.getheader("Content-Type"),
+                "application/octet-stream",
+            )
+            self.assertIn(
+                "attachment",
+                resp.getheader("Content-Disposition", ""),
+            )
+            conn.close()
+        finally:
+            shutil.rmtree(artifact_dir)
+
+
+class TestCORSHeader(unittest.TestCase):
+    """验证 CORS 响应头不再使用通配符。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server, cls.port = _start_server()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def test_cors_not_wildcard_on_api(self):
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", "/api/workspaces")
+        resp = conn.getresponse()
+        resp.read()
+        cors = resp.getheader("Access-Control-Allow-Origin", "")
+        conn.close()
+        self.assertNotEqual(cors, "*", "CORS header must not be wildcard")
+        self.assertIn("127.0.0.1", cors)
+
+
+class TestResultsDirConstant(unittest.TestCase):
+    """验证 RESULTS_DIR 指向 ROOT/results 的绝对路径。"""
+
+    def test_results_dir_is_absolute(self):
+        self.assertTrue(RESULTS_DIR.is_absolute())
+
+    def test_results_dir_under_root(self):
+        self.assertTrue(str(RESULTS_DIR).startswith(str(SERVER_ROOT)))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,279 @@
+% IEEE Conference Template for ML/AI Papers
+% Document class specification - conference format for IEEE
+\documentclass[conference]{IEEEtran}
+
+% Override command lockouts (typically needed for IEEE papers)
+\IEEEoverridecommandlockouts
+% The preceding line is only needed to identify funding in the first footnote. If that is unneeded, please comment it out.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% PACKAGES
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Citation management
+\usepackage{cite}                    % For bibliography citations
+
+% Text and list formatting
+\usepackage{enumitem}                % Enhanced list environments
+\usepackage{amsmath,amssymb,amsfonts} % Mathematical symbols and fonts
+
+% Algorithms
+\usepackage{algorithm}               % For algorithm environments
+\usepackage{algorithmic}             % For algorithm formatting
+
+% Graphics and visual elements
+\usepackage{graphicx}                % For including images
+\usepackage{textcomp}                % Text companion fonts
+\usepackage{xcolor}                  % For colored text
+\usepackage{forest}                  % For drawing tree diagrams
+
+% TikZ and related packages for diagrams
+\usepackage{tikz}                    % Core package for creating graphics
+\usepackage{adjustbox}               % For scaling figures
+\usepackage{url}                     % For formatting URLs
+
+% Figure and table enhancements
+\usepackage{pgfplots}                % For creating plots
+\usepackage{booktabs}                % For professional-looking tables
+\usepackage{colortbl}                % For colored table cells
+
+% TikZ libraries for specific diagram types
+\usetikzlibrary{shapes.geometric,arrows,positioning,fit,backgrounds,calc,decorations.pathreplacing,decorations.markings,patterns,circuits.logic.US,matrix,chains}
+
+% Table enhancements
+\usepackage{threeparttable}          % For table notes
+\usepackage{cuted}                   % For multi-column environments
+
+% Custom command for line breaks in author block
+\makeatletter
+\newcommand{\linebreakand}{%
+  \end{@IEEEauthorhalign}
+  \hfill\mbox{}\par
+  \mbox{}\hfill\begin{@IEEEauthorhalign}
+}
+\makeatother
+
+% Define custom colors for visualizations
+% These are common colors used in AI/ML papers
+\definecolor{qubitblue}{RGB}{70,130,180}      % Blue for primary elements
+\definecolor{controlred}{RGB}{220,20,60}      % Red for control elements
+\definecolor{aigreen}{RGB}{50,150,50}         % Green for AI components
+\definecolor{quantumpurple}{RGB}{128,0,128}   % Purple for quantum elements
+\definecolor{errororange}{RGB}{255,140,0}     % Orange for error highlighting
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% DOCUMENT BEGINS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{document}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% TITLE SECTION
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\title{[Your Paper Title: Should Be Specific and Descriptive]}
+
+\author{
+    \IEEEauthorblockN{
+        [Author 1]\textsuperscript{*, a, b},
+        [Author 2]\textsuperscript{a},
+        [Author 3]\textsuperscript{c}, 
+        [Author 4]\textsuperscript{d}
+        % Add more authors as needed
+    }
+    \IEEEauthorblockA{
+        \textsuperscript{a}[Institution 1, Country]
+    }
+    \IEEEauthorblockA{
+        \textsuperscript{b}[Institution 2, Country]
+    }
+    \IEEEauthorblockA{
+        \textsuperscript{c}[Institution 3, Country]
+    }
+    % Add more institutions as needed
+    \IEEEauthorblockA{
+        *Corresponding Email: [email@example.com]
+    }
+}
+
+\maketitle
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% KEYWORDS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{IEEEkeywords}
+[Keyword 1], [Keyword 2], [Keyword 3], [Keyword 4], [Keyword 5]
+\end{IEEEkeywords}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% ABSTRACT
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{abstract}
+[Your abstract should be a single paragraph (150-250 words) that summarizes your work. It should clearly state: 
+(1) the problem addressed, 
+(2) your approach/methodology, 
+(3) key results, and 
+(4) main conclusions or implications. 
+Be specific and quantitative about your findings. Avoid citations in the abstract.]
+\end{abstract}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% INTRODUCTION
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Introduction}
+[The introduction should:
+- Establish the context and importance of your work
+- Clearly state the problem or research question
+- Briefly review relevant prior work (with citations using \verb|\cite{key}|)
+- Outline your approach and contributions
+- Provide a roadmap for the rest of the paper
+
+Example citation: Previous work \cite{author2023paper} has shown...]
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% BACKGROUND
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Background and Preliminaries}
+[This section should:
+- Define core terms and problem settings (with citations)
+- Provide historical context (timeline is often useful)
+- Clarify what is in-scope vs out-of-scope for this review
+- Introduce the main families of approaches at a high level
+- Use citations for all key claims \cite{smith2022deep}]
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% BUILDING BLOCKS / TAXONOMY
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Building Blocks}
+[This section should:
+- Break down the topic into reusable components (data, architectures, objectives, inference)
+- Present a taxonomy and explain why it is useful
+- Provide representative papers for each component/family
+- Define all symbols if using equations
+- Example mathematical equation placeholder (replace with a topic-relevant one):]
+
+\begin{equation}
+    \mathcal{L}(\theta) = \mathbb{E}_{(x,y) \sim \mathcal{D}} [L(f_\theta(x), y)]
+\end{equation}
+
+\subsection{Core Definitions}
+[Define the key terms and assumptions used throughout the review]
+
+\subsubsection{Notation and Assumptions}
+[List symbols and core assumptions that will be reused across sections]
+
+\subsubsection{Problem Variants}
+[Call out common task variants or settings that affect comparability]
+
+\subsection{Design Choices and Model Families}
+[Describe the major model families and design tradeoffs; include citations for each category]
+
+\subsubsection{Approach Families}
+[Summarize the main approach families and representative examples]
+
+\subsubsection{Design Tradeoffs}
+[Explain the key tradeoffs (data, compute, latency, robustness, interpretability)]
+
+\subsection{Implementation Notes (Optional)}
+[If helpful, summarize common implementation patterns from the literature (e.g., training tricks, scaling behavior)]
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% FIGURES & DIAGRAMS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Example figure using TikZ
+\begin{figure}[t]
+    \centering
+    \begin{tikzpicture}[
+        scale=0.8, transform shape,
+        node distance=0.7cm,
+        % Prefer low-saturation fills for readability in two-column papers.
+        box/.style={rectangle, rounded corners, draw, fill=#1!15, text=black,
+            minimum width=3.8cm,
+            minimum height=0.8cm,
+            align=center, font=\sffamily\footnotesize}
+    ]
+        % Add TikZ code here for your diagram
+        % Example:
+        \node[box=qubitblue] (node1) {Input};
+        \node[box=aigreen, below=of node1] (node2) {Process};
+        \node[box=quantumpurple, below=of node2] (node3) {Output};
+        
+        % Connections
+        \draw[->, thick] (node1) -- (node2);
+        \draw[->, thick] (node2) -- (node3);
+    \end{tikzpicture}
+    \caption{[Caption describing your figure. Be specific and ensure the figure can be understood independently of the main text.]}
+    \label{fig:example}
+\end{figure}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% FRONTIER MODELS / SYSTEMS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Frontier Models and Systems}
+[This section should:
+- Summarize what qualifies as ``frontier'' for this topic (define ``latest'' and cutoffs)
+- Compare leading systems by capability, data/compute disclosures, and reproducibility
+- Include a timeline or table of major releases (with citations)]
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% EVALUATION
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Evaluation and Benchmarks}
+[This section should:
+- Describe common benchmarks, protocols, and metrics (with citations)
+- Discuss strengths/weaknesses of evaluation setups
+- Summarize reproducible comparisons when available]
+
+\subsection{Benchmarks and Metrics}
+[List the main benchmarks and what they measure]
+
+\subsubsection{Dataset and Task Coverage}
+[Note where benchmarks cover or miss important settings]
+
+\subsubsection{Metric Limitations}
+[Discuss metric caveats and when alternative metrics are used]
+
+\subsection{Failure Modes and Robustness}
+[Discuss typical failure modes, bias, and robustness concerns supported by evidence]
+
+% Example table
+\begin{table}[t]
+\centering
+\caption{[Comparison table caption (models / datasets / metrics / constraints).]}
+\label{tab:results}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Method} & \textbf{Metric 1} & \textbf{Metric 2} & \textbf{Metric 3} \\
+\midrule
+Model A \cite{author2023paper} & 0.XX & 0.XX & 0.XX \\
+Model B \cite{jones2023transformer} & 0.XX & 0.XX & 0.XX \\
+Model C \cite{zhang2024large} & \textbf{0.XX} & \textbf{0.XX} & \textbf{0.XX} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% SAFETY / PROVENANCE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Safety and Provenance}
+[This section should:
+- Cover safety, misuse, privacy, and governance considerations (with citations)
+- Discuss provenance approaches (watermarking, metadata, detection) when relevant
+- Distinguish evidence-backed claims from open questions]
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% OPEN CHALLENGES + CONCLUSION
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Open Challenges and Conclusion}
+\subsection{Open Challenges}
+[List concrete open problems and why they matter; cite relevant evidence or position papers]
+
+\subsection{Conclusion}
+[Summarize the review's takeaways. Do not introduce new claims without citations.]
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% BIBLIOGRAPHY
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Keep this label for page-count reporting in scripts/compile_paper.py.
+\label{ReferencesStart}
+\bibliographystyle{ieeetr}  
+\bibliography{ref} % References are in ref.bib
+
+\end{document} 

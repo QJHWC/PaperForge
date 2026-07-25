@@ -1,0 +1,2 @@
+-r requirements-writeup.txt
+google-generativeai==0.8.6

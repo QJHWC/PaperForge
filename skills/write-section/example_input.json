@@ -1,0 +1,9 @@
+{
+  "section_name": "Method",
+  "notes": "We introduce a staged writeup controller with checkpoint-aware refinement and citation augmentation.",
+  "idea_metadata": {
+    "Title": "PaperForge"
+  },
+  "style_policy": "concise, technical, reviewer-friendly",
+  "existing_tex_context": "\\section{Introduction}"
+}

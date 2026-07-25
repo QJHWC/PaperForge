@@ -1,0 +1,5 @@
+{
+  "draft": "Our staged workflow relies on checkpoint-aware citation repair, but related systems rarely expose this behavior as a stable contract.",
+  "current_round": 1,
+  "total_rounds": 3
+}

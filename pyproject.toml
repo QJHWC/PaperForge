@@ -1,0 +1,88 @@
+[build-system]
+requires = ["setuptools>=75,<81", "wheel>=0.45,<1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paperforge-research-os"
+version = "3.0.0"
+description = "Evidence-first research, experiment and publication runtime"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = {file = "LICENSE"}
+authors = [{name = "PaperForge contributors"}]
+dependencies = []
+
+[project.optional-dependencies]
+writing = [
+  "aider-chat==0.86.2",
+  "anthropic==0.84.0",
+  "backoff==2.2.1",
+  "numpy==1.26.4",
+  "openai==2.20.0",
+  "pyalex==0.21",
+  "pymupdf==1.27.1",
+  "pymupdf4llm==0.3.4",
+  "pypdf==6.7.5",
+  "requests==2.32.5",
+]
+research = [
+  "google-generativeai==0.8.6",
+]
+experiment = [
+  "datasets==4.6.1",
+  "matplotlib==3.10.8",
+  "paramiko>=3.4,<5",
+  "pyyaml>=6.0,<7",
+  "tiktoken==0.12.0",
+  "torch==2.10.0",
+  "tqdm==4.67.3",
+  "transformers==5.2.0",
+  "wandb==0.25.0",
+]
+dev = [
+  "mypy==1.16.1",
+  "pytest==8.4.1",
+  "ruff==0.12.2",
+  "types-PyYAML==6.0.12.20250516",
+  "types-requests==2.32.4.20250611",
+]
+
+[project.scripts]
+paperforge = "paperforge.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["paperforge*", "engine*", "agents*", "frontend*", "mcp_servers*", "skills*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+exclude = [
+  ".venv-writeup",
+  "build",
+  "examples/demos",
+  "output",
+  "results",
+  "third_party",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"frontend/server.py" = ["E402"]
+"tests/test_server_security.py" = ["E402"]
+"tests/test_agent_bridges.py" = ["SIM117"]
+"tests/test_locking.py" = ["SIM117"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["paperforge"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true

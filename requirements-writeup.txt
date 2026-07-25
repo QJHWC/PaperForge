@@ -1,0 +1,14 @@
+-r requirements-core.txt
+
+# Lightweight dependency set for literature lookup, LLM writing and LaTeX output.
+# It intentionally excludes torch, transformers, datasets, wandb and plotting.
+anthropic==0.84.0
+aider-chat==0.86.2
+backoff==2.2.1
+openai==2.20.0
+pyalex==0.21
+pypdf==6.7.5
+pymupdf==1.27.1
+pymupdf4llm==0.3.4
+# Aider 0.86.2 pins this version; it also supports this machine's Python 3.10.
+numpy==1.26.4

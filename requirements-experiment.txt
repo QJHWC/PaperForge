@@ -1,0 +1,12 @@
+-r requirements-core.txt
+
+# CPU/GPU selection is delegated to the PyTorch installer or compute backend.
+numpy==1.26.4
+torch==2.10.0
+transformers==5.2.0
+datasets==4.6.1
+tiktoken==0.12.0
+wandb==0.25.0
+tqdm==4.67.3
+matplotlib==3.10.8
+paramiko>=3.4,<5

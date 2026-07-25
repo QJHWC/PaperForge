@@ -1,0 +1,17 @@
+{
+  "Selected": [
+    {
+      "title": "Workflow Contracts for LLM Systems",
+      "year": 2025
+    },
+    {
+      "title": "Checkpoint Recovery in Scientific Writing Pipelines",
+      "year": 2024
+    }
+  ],
+  "Description": "优先保留标题最完整的候选文献。",
+  "selected_titles": [
+    "Workflow Contracts for LLM Systems",
+    "Checkpoint Recovery in Scientific Writing Pipelines"
+  ]
+}

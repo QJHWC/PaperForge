@@ -1,0 +1,691 @@
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+
+from engine.llm import AVAILABLE_LLMS, gateway_profile_env_overrides, resolve_gateway_profile
+from engine.mvp_workflow import (
+    append_upload_feedback_to_notes,
+    create_workspace_from_template,
+    ensure_upload_interface,
+    ingest_user_uploads,
+    initialize_notes,
+    load_idea_metadata,
+    load_workflow_state,
+    next_run_index,
+    refresh_notes_with_literature,
+    refresh_notes_with_run_feedback,
+    run_experiment_once,
+    run_plotting,
+    save_workflow_state,
+    write_idea_metadata,
+)
+from engine.run_lock import run_lock
+from engine.workspace_config import (
+    DEFAULT_WORKSPACE_CONFIG,
+    load_workspace_config,
+    resolve_config_path,
+    save_workspace_config,
+)
+from paperforge.provider import build_aider_model
+
+ROOT = Path(__file__).resolve().parent
+
+
+def _in_virtualenv() -> bool:
+    return bool(getattr(sys, "base_prefix", sys.prefix) != sys.prefix)
+
+
+def _require_virtualenv(script_name: str) -> None:
+    allow_system = os.getenv("PAPERFORGE_ALLOW_SYSTEM_PYTHON", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if allow_system or _in_virtualenv():
+        return
+
+    raise SystemExit(
+        "环境错误: 检测到正在使用系统 Python 运行 PaperForge。\n"
+        f"当前解释器: {sys.executable}\n"
+        "请先激活虚拟环境后再运行，例如:\n"
+        f"  source .venv311/bin/activate && python {script_name} --help\n"
+        "如需强制跳过校验，可设置 PAPERFORGE_ALLOW_SYSTEM_PYTHON=1。"
+    )
+
+
+if __name__ == "__main__":
+    _require_virtualenv("launch_mvp_workflow.py")
+
+
+@dataclass
+class WriteupRuntimeConfig:
+    writeup_model: str
+    gateway_profile: str
+    existing_draft: str | None
+    skip_chktex_fix: bool
+
+
+def _build_aider_model(model_name: str, gateway_profile: str | None = None):
+    profile = gateway_profile or "safe"
+    return build_aider_model(
+        model_name,
+        generation_profile=profile,
+        stage="writeup",
+    )
+
+
+def _aider_stream_enabled(gateway_profile: str | None = None) -> bool:
+    return bool(resolve_gateway_profile(gateway_profile)["stream"])
+
+
+@contextmanager
+def _temporary_env(overrides: dict[str, str]):
+    backup = {}
+    for key, value in overrides.items():
+        backup[key] = os.environ.get(key)
+        os.environ[key] = value
+    try:
+        yield
+    finally:
+        for key, value in backup.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _profile_env(profile: str) -> dict[str, str]:
+    if profile == "fast":
+        return {
+            "WRITEUP_CITE_ROUNDS": "2",
+            "WRITEUP_LATEX_FIX_ROUNDS": "1",
+            "WRITEUP_SECOND_REFINEMENT": "0",
+        }
+    if profile == "deep":
+        return {
+            "WRITEUP_CITE_ROUNDS": "6",
+            "WRITEUP_LATEX_FIX_ROUNDS": "3",
+            "WRITEUP_SECOND_REFINEMENT": "1",
+        }
+    return {}
+
+
+def _deprecated_env_bool(name: str) -> bool | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    print(f"[deprecated] {name} is deprecated; use CLI flags or workspace_config.json instead.")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_writeup_runtime_config(
+    args: argparse.Namespace,
+    workspace: Path,
+) -> WriteupRuntimeConfig:
+    config = load_workspace_config(str(workspace))
+    writeup_model = args.writeup_model or str(config.get("writeup_model") or DEFAULT_WORKSPACE_CONFIG["writeup_model"])
+    gateway_profile = args.gateway_profile or str(
+        config.get("gateway_profile") or DEFAULT_WORKSPACE_CONFIG["gateway_profile"]
+    )
+
+    existing_draft = None
+    if getattr(args, "phase", None) == "refine":
+        existing_draft = args.existing_draft
+        if existing_draft is None:
+            cfg_draft = config.get("existing_draft")
+            if isinstance(cfg_draft, str) and cfg_draft.strip():
+                existing_draft = resolve_config_path(str(workspace), cfg_draft.strip())
+
+    use_existing_draft_env = _deprecated_env_bool("WRITEUP_USE_EXISTING_DRAFT")
+    use_existing_draft = existing_draft is not None or bool(use_existing_draft_env)
+
+    skip_chktex_fix = args.skip_chktex_fix
+    if skip_chktex_fix is None:
+        if "skip_chktex_fix" in config:
+            skip_chktex_fix = bool(config["skip_chktex_fix"])
+        else:
+            deprecated = _deprecated_env_bool("WRITEUP_SKIP_CHKTEX_FIX")
+            skip_chktex_fix = deprecated if deprecated is not None else use_existing_draft
+
+    return WriteupRuntimeConfig(
+        writeup_model=writeup_model,
+        gateway_profile=gateway_profile,
+        existing_draft=existing_draft,
+        skip_chktex_fix=bool(skip_chktex_fix),
+    )
+
+
+def _persist_workspace_runtime_config(workspace: Path, runtime: WriteupRuntimeConfig) -> None:
+    current = load_workspace_config(str(workspace))
+    existing_draft = runtime.existing_draft
+    if existing_draft:
+        draft_path = Path(existing_draft).expanduser().resolve()
+        try:
+            existing_draft = draft_path.relative_to(workspace.resolve()).as_posix()
+        except ValueError:
+            existing_draft = str(draft_path)
+    elif current.get("existing_draft"):
+        existing_draft = current.get("existing_draft")
+    save_workspace_config(
+        str(workspace),
+        {
+            "writeup_model": runtime.writeup_model or current.get("writeup_model"),
+            "gateway_profile": runtime.gateway_profile or current.get("gateway_profile"),
+            "existing_draft": existing_draft,
+            "skip_chktex_fix": runtime.skip_chktex_fix,
+        },
+    )
+
+
+def _update_state(workspace: Path, **updates) -> None:
+    state = load_workflow_state(str(workspace))
+    state.update(updates)
+    save_workflow_state(str(workspace), state)
+
+
+def _resolve_workspace(path_or_none: str | None) -> Path | None:
+    if not path_or_none:
+        return None
+    path = Path(path_or_none).expanduser()
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    return path
+
+
+def _copy_phase_pdf(workspace: Path, idea_name: str, output_name: str) -> None:
+    generated = workspace / f"{idea_name}.pdf"
+    if generated.exists():
+        shutil.copy2(generated, workspace / output_name)
+
+
+def _run_writeup_phase(
+    workspace: Path,
+    runtime: WriteupRuntimeConfig,
+    engine: str,
+    history_name: str,
+    output_pdf_name: str,
+    profile: str,
+) -> None:
+    from aider.coders import Coder
+    from aider.io import InputOutput
+
+    from engine.llm import create_client
+    from engine.perform_writeup import perform_writeup
+
+    idea = load_idea_metadata(str(workspace))
+    notes = workspace / "notes.txt"
+    writeup_file = workspace / "latex" / "template.tex"
+    if runtime.existing_draft:
+        draft_source = Path(runtime.existing_draft).expanduser().resolve()
+        if not draft_source.exists():
+            raise SystemExit(f"existing draft not found: {draft_source}")
+        if draft_source != writeup_file.resolve():
+            shutil.copy2(draft_source, writeup_file)
+
+    fnames = [str(writeup_file), str(notes)]
+
+    io = InputOutput(
+        yes=True,
+        chat_history_file=str(workspace / f"{history_name}_writeup_aider.txt"),
+    )
+    edit_format = os.getenv("PAPERFORGE_AIDER_EDIT_FORMAT", "udiff").strip() or "udiff"
+    env_overrides = {
+        **_profile_env(profile),
+        **gateway_profile_env_overrides(runtime.gateway_profile),
+        "PAPERFORGE_EXECUTION_PROFILE": "writing-only",
+    }
+    with _temporary_env(env_overrides):
+        coder = Coder.create(
+            main_model=_build_aider_model(runtime.writeup_model, runtime.gateway_profile),
+            fnames=fnames,
+            io=io,
+            stream=_aider_stream_enabled(runtime.gateway_profile),
+            use_git=False,
+            edit_format=edit_format,
+            auto_lint=False,
+        )
+        client, client_model = create_client(runtime.writeup_model)
+        perform_writeup(
+            idea=idea,
+            folder_name=str(workspace),
+            coder=coder,
+            cite_client=client,
+            cite_model=client_model,
+            engine=engine,
+            existing_draft_path=runtime.existing_draft,
+            skip_chktex_fix=runtime.skip_chktex_fix,
+        )
+    _copy_phase_pdf(workspace, idea_name=idea["Name"], output_name=output_pdf_name)
+
+
+def _phase_bootstrap(args: argparse.Namespace, workspace: Path | None, *, create_workspace: bool = True) -> Path:
+    if workspace is None:
+        if not create_workspace:
+            raise SystemExit("workspace must be created before bootstrap when create_workspace=False")
+        try:
+            workspace = Path(
+                create_workspace_from_template(args.experiment, args.idea_name)
+            ).resolve()
+        except FileNotFoundError as exc:
+            raise SystemExit(str(exc)) from exc
+    else:
+        workspace = workspace.resolve()
+        workspace.mkdir(parents=True, exist_ok=True)
+    _update_state(workspace, phase="bootstrap_running", current_phase="bootstrap", status="running")
+
+    write_idea_metadata(
+        str(workspace),
+        idea_name=args.idea_name,
+        title=args.title,
+        description=args.description,
+    )
+    notes_path = Path(
+        initialize_notes(
+            str(workspace),
+            title=args.title,
+            description=args.description,
+            overwrite=False,
+        )
+    )
+    ensure_upload_interface(str(workspace))
+    if not (workspace / "workspace_config.json").exists():
+        save_workspace_config(str(workspace), {})
+
+    if args.refresh_literature:
+        refresh_notes_with_literature(
+            notes_path=str(notes_path),
+            query=args.title,
+            engine=args.engine,
+            top_k=args.literature_top_k,
+        )
+
+    mvp_ok = False
+    if args.run_experiment and not args.skip_mvp_run:
+        _validate_experiment_permission(workspace, args)
+        run_info = run_experiment_once(
+            workspace=str(workspace),
+            python_bin=args.python_bin,
+            run_index=args.bootstrap_run_index,
+        )
+        mvp_ok = run_info["returncode"] == 0
+        print(
+            "[bootstrap] run_{idx} returncode={rc}".format(
+                idx=run_info["run_index"], rc=run_info["returncode"]
+            )
+        )
+        if run_info["stderr"]:
+            print(run_info["stderr"])
+        plot_info = run_plotting(str(workspace), python_bin=args.python_bin)
+        print(f"[bootstrap] plot returncode={plot_info['returncode']}")
+        if plot_info["stderr"]:
+            print(plot_info["stderr"])
+
+    refresh_notes_with_run_feedback(str(workspace), str(notes_path))
+
+    if not args.skip_writeup:
+        runtime = _resolve_writeup_runtime_config(args, workspace)
+        _persist_workspace_runtime_config(workspace, runtime)
+        _run_writeup_phase(
+            workspace=workspace,
+            runtime=runtime,
+            engine=args.engine,
+            history_name="mvp_bootstrap",
+            output_pdf_name="paper_mvp_draft.pdf",
+            profile="fast",
+        )
+
+    _update_state(
+        workspace,
+        phase="bootstrap_completed",
+        current_phase="bootstrap",
+        status="completed",
+        mvp_completed=mvp_ok,
+        upload_interface_ready=True,
+    )
+    print(f"[bootstrap] workspace={workspace}")
+    return workspace
+
+
+def _phase_feedback(args: argparse.Namespace, workspace: Path) -> None:
+    _update_state(workspace, phase="feedback_running", current_phase="feedback", status="running")
+    ensure_upload_interface(str(workspace))
+    manifest = ingest_user_uploads(str(workspace))
+    notes_path = workspace / "notes.txt"
+    if notes_path.exists():
+        append_upload_feedback_to_notes(str(notes_path), manifest)
+        refresh_notes_with_run_feedback(str(workspace), str(notes_path))
+
+    if args.refresh_literature:
+        refresh_notes_with_literature(
+            notes_path=str(notes_path),
+            query=args.title,
+            engine=args.engine,
+            top_k=args.literature_top_k,
+        )
+
+    if not args.skip_writeup:
+        runtime = _resolve_writeup_runtime_config(args, workspace)
+        _persist_workspace_runtime_config(workspace, runtime)
+        _run_writeup_phase(
+            workspace=workspace,
+            runtime=runtime,
+            engine=args.engine,
+            history_name="mvp_feedback",
+            output_pdf_name="paper_with_feedback.pdf",
+            profile="balanced",
+        )
+
+    _update_state(
+        workspace,
+        phase="feedback_completed",
+        current_phase="feedback",
+        status="completed",
+        ingested_uploads=True,
+        upload_manifest=str(workspace / "artifacts" / "upload_manifest.json"),
+    )
+    print(f"[feedback] workspace={workspace}")
+
+
+def _phase_optimize(args: argparse.Namespace, workspace: Path) -> None:
+    _update_state(workspace, phase="optimize_running", current_phase="optimize", status="running")
+    if args.run_experiment and not args.skip_mvp_run:
+        _validate_experiment_permission(workspace, args)
+        for _ in range(max(0, int(args.optimize_runs))):
+            run_idx = next_run_index(str(workspace))
+            run_info = run_experiment_once(
+                workspace=str(workspace),
+                python_bin=args.python_bin,
+                run_index=run_idx,
+            )
+            print(
+                "[optimize] run_{idx} returncode={rc}".format(
+                    idx=run_info["run_index"], rc=run_info["returncode"]
+                )
+            )
+            if run_info["stderr"]:
+                print(run_info["stderr"])
+            if run_info["returncode"] != 0:
+                break
+
+        plot_info = run_plotting(str(workspace), python_bin=args.python_bin)
+        print(f"[optimize] plot returncode={plot_info['returncode']}")
+        if plot_info["stderr"]:
+            print(plot_info["stderr"])
+
+    notes_path = workspace / "notes.txt"
+    refresh_notes_with_run_feedback(str(workspace), str(notes_path))
+
+    if not args.skip_writeup:
+        runtime = _resolve_writeup_runtime_config(args, workspace)
+        _persist_workspace_runtime_config(workspace, runtime)
+        _run_writeup_phase(
+            workspace=workspace,
+            runtime=runtime,
+            engine=args.engine,
+            history_name="mvp_optimize",
+            output_pdf_name="paper_after_optimize.pdf",
+            profile="balanced",
+        )
+
+    _update_state(workspace, phase="optimize_completed", current_phase="optimize", status="completed")
+    print(f"[optimize] workspace={workspace}")
+
+
+def _phase_refine(args: argparse.Namespace, workspace: Path) -> None:
+    _update_state(workspace, phase="refine_running", current_phase="refine", status="running")
+    if not args.skip_writeup:
+        runtime = _resolve_writeup_runtime_config(args, workspace)
+        _persist_workspace_runtime_config(workspace, runtime)
+        _run_writeup_phase(
+            workspace=workspace,
+            runtime=runtime,
+            engine=args.engine,
+            history_name="mvp_refine",
+            output_pdf_name="paper_refined.pdf",
+            profile=args.refine_profile,
+        )
+
+    _update_state(workspace, phase="refine_completed", current_phase="refine", status="completed")
+    print(f"[refine] workspace={workspace}")
+
+
+def _phase_cloud(args: argparse.Namespace, workspace: Path) -> None:
+    _update_state(workspace, phase="cloud_running", current_phase="cloud", status="running")
+    cmd = [
+        args.python_bin,
+        str(ROOT / "run_cloud_pipeline_cycle.py"),
+        "--workspace",
+        str(workspace),
+    ]
+    if args.cloud_run_dir:
+        cmd += ["--cloud-run-dir", str(args.cloud_run_dir)]
+    if args.pipeline_root:
+        cmd += ["--pipeline-root", str(args.pipeline_root)]
+    if args.pipeline_config:
+        cmd += ["--config", args.pipeline_config]
+    if args.pipeline_run_name:
+        cmd += ["--run-name", args.pipeline_run_name]
+    if args.pipeline_mode:
+        cmd += ["--mode", args.pipeline_mode]
+    if args.pipeline_hardware_profile:
+        cmd += ["--hardware-profile", args.pipeline_hardware_profile]
+    if args.pipeline_device:
+        cmd += ["--device", args.pipeline_device]
+    if args.remote_config:
+        cmd += ["--remote-config", str(args.remote_config)]
+    if args.cloud_skip_run:
+        cmd.append("--skip-run")
+    if args.cloud_skip_sync:
+        cmd.append("--skip-sync")
+    print("[cloud]", " ".join(cmd))
+    proc = subprocess.run(cmd, cwd=str(ROOT), check=False)
+    if proc.returncode != 0:
+        raise SystemExit(proc.returncode)
+    _update_state(workspace, phase="cloud_completed", current_phase="cloud", status="completed")
+
+
+def _default_pipeline_root() -> str:
+    return ""
+
+
+def _check_latex_dependencies() -> bool:
+    required = ["pdflatex", "bibtex", "chktex"]
+    missing = [name for name in required if shutil.which(name) is None]
+    if missing:
+        print(
+            "Error: Required LaTeX dependencies not found: " + ", ".join(missing),
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="MVP staged workflow launcher")
+    p.add_argument(
+        "--phase",
+        choices=["bootstrap", "feedback", "optimize", "refine", "cloud", "all"],
+        default="bootstrap",
+    )
+    p.add_argument("--experiment", default="paper_writer")
+    p.add_argument("--run-dir", default=None, help="Existing workspace path")
+    p.add_argument("--idea-name", default="paper_writer_mvp_pipeline")
+    p.add_argument(
+        "--title",
+        default="Iterative Academic Paper Writing with Upload Feedback",
+    )
+    p.add_argument(
+        "--description",
+        default="Generate draft, ingest uploaded server outputs, and iteratively refine the paper.",
+    )
+    p.add_argument(
+        "--engine",
+        choices=["semanticscholar", "openalex"],
+        default="openalex",
+    )
+    p.add_argument(
+        "--writeup-model",
+        default=None,
+        choices=AVAILABLE_LLMS,
+    )
+    p.add_argument("--gateway-profile", choices=["safe", "full"], default=None)
+    p.add_argument("--existing-draft", default=None, help="Path to an existing .tex manuscript used as the refine draft.")
+    p.add_argument(
+        "--skip-chktex-fix",
+        dest="skip_chktex_fix",
+        action="store_true",
+        help="Skip chktex-driven auto-fix rounds and only emit reports/compile outputs.",
+    )
+    p.add_argument(
+        "--no-skip-chktex-fix",
+        dest="skip_chktex_fix",
+        action="store_false",
+        help="Allow chktex-driven auto-fix rounds.",
+    )
+    p.set_defaults(skip_chktex_fix=None)
+    p.add_argument("--python-bin", default=sys.executable)
+    p.add_argument("--skip-writeup", action="store_true")
+    p.add_argument(
+        "--run-experiment",
+        action="store_true",
+        help="Explicitly execute experiment.py; requires full profile and an approved proposal.",
+    )
+    p.add_argument("--skip-mvp-run", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument(
+        "--profile",
+        choices=["writing-only", "research", "full"],
+        default="writing-only",
+    )
+    p.add_argument("--proposal-id", default=None)
+    p.add_argument("--bootstrap-run-index", type=int, default=1)
+    p.add_argument("--optimize-runs", type=int, default=2)
+    p.add_argument(
+        "--refine-profile",
+        choices=["fast", "balanced", "deep"],
+        default="balanced",
+    )
+    p.add_argument("--refresh-literature", action="store_true")
+    p.add_argument("--literature-top-k", type=int, default=5)
+    p.add_argument(
+        "--rubric-profile",
+        choices=["default", "cvpr", "journal_q2"],
+        default="default",
+    )
+    p.add_argument("--evidence-file", action="append", default=[])
+
+    p.add_argument("--run-cloud-cycle", action="store_true")
+    p.add_argument(
+        "--cloud-run-dir",
+        default=None,
+        help="Local directory containing server/cloud outputs to ingest.",
+    )
+    p.add_argument("--pipeline-root", default=_default_pipeline_root())
+    p.add_argument("--pipeline-config", default=None)
+    p.add_argument("--pipeline-run-name", default="final_full")
+    p.add_argument("--pipeline-mode", choices=["auto", "real", "sim"], default="auto")
+    p.add_argument("--pipeline-hardware-profile", default=None)
+    p.add_argument("--pipeline-device", default=None)
+    p.add_argument("--cloud-skip-run", action="store_true")
+    p.add_argument("--cloud-skip-sync", action="store_true")
+    p.add_argument("--remote-config", default=None, help="Path to remote.yaml for SSH remote execution in cloud phase.")
+    return p
+
+
+def _validate_experiment_permission(workspace: Path, args: argparse.Namespace) -> None:
+    from paperforge.policy import Action, ExecutionPolicy
+    from paperforge.workflow import WorkflowEngine
+
+    policy = ExecutionPolicy.from_value(args.profile)
+    policy.require(Action.EXPERIMENT_FULL)
+    policy.require(Action.LOCAL_EXECUTE)
+    if not args.proposal_id:
+        raise PermissionError("--run-experiment requires --proposal-id")
+    WorkflowEngine(workspace).require_approval(args.proposal_id)
+    if not (workspace / "experiment.py").is_file():
+        raise FileNotFoundError("approved workspace has no experiment.py")
+
+
+def _require_workspace(workspace: Path | None, phase: str) -> Path:
+    if workspace is None:
+        raise SystemExit(f"--run-dir is required for phase `{phase}`")
+    if not workspace.exists():
+        raise SystemExit(f"workspace not found: {workspace}")
+    return workspace.resolve()
+
+
+@contextmanager
+def _workspace_write_lock(workspace: Path):
+    with run_lock(workspace, timeout=30, poll_interval=0.2, verbose=True):
+        yield
+
+
+@contextmanager
+def _experiment_root_write_lock(experiment: str):
+    root = (Path("results") / experiment).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    with run_lock(root, timeout=30, poll_interval=0.2, verbose=True):
+        yield
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    if args.existing_draft and args.phase != "refine":
+        raise SystemExit("--existing-draft is only supported with --phase refine")
+    if (
+        not args.skip_writeup
+        and args.phase in {"bootstrap", "feedback", "optimize", "refine", "all"}
+        and not _check_latex_dependencies()
+    ):
+        raise SystemExit(1)
+    workspace = _resolve_workspace(args.run_dir)
+
+    if args.phase == "bootstrap":
+        if workspace is None:
+            with _experiment_root_write_lock(args.experiment):
+                workspace = Path(create_workspace_from_template(args.experiment, args.idea_name)).resolve()
+        with _workspace_write_lock(workspace.resolve()):
+            workspace = _phase_bootstrap(args, workspace, create_workspace=False)
+    elif args.phase == "feedback":
+        required_workspace = _require_workspace(workspace, args.phase)
+        with _workspace_write_lock(required_workspace):
+            _phase_feedback(args, required_workspace)
+    elif args.phase == "optimize":
+        required_workspace = _require_workspace(workspace, args.phase)
+        with _workspace_write_lock(required_workspace):
+            _phase_optimize(args, required_workspace)
+    elif args.phase == "refine":
+        required_workspace = _require_workspace(workspace, args.phase)
+        with _workspace_write_lock(required_workspace):
+            _phase_refine(args, required_workspace)
+    elif args.phase == "cloud":
+        required_workspace = _require_workspace(workspace, args.phase)
+        with _workspace_write_lock(required_workspace):
+            _phase_cloud(args, required_workspace)
+    elif args.phase == "all":
+        if workspace is None:
+            with _experiment_root_write_lock(args.experiment):
+                workspace = Path(create_workspace_from_template(args.experiment, args.idea_name)).resolve()
+        with _workspace_write_lock(workspace.resolve()):
+            workspace = _phase_bootstrap(args, workspace, create_workspace=False)
+            if args.run_cloud_cycle:
+                _phase_cloud(args, workspace)
+            _phase_feedback(args, workspace)
+            _phase_optimize(args, workspace)
+            _phase_refine(args, workspace)
+    else:
+        raise SystemExit(f"Unsupported phase: {args.phase}")
+
+    if workspace is not None:
+        print(f"[done] workspace={workspace}")
+
+
+if __name__ == "__main__":
+    main()
