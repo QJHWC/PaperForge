@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Protocol
 
 from engine.secret_redaction import redact_secrets
+from paperforge.path_safety import (
+    safe_mkdir,
+    validate_writable_path,
+)
 from paperforge.policy import Action, ExecutionPolicy
 
 from .contracts import (
@@ -96,11 +100,27 @@ class ComputeBackend(ABC):
     ) -> None:
         self.policy = policy or ExecutionPolicy.from_value(None)
         self.runner = runner or SubprocessCommandRunner()
-        self.state_dir = Path(state_dir or Path.cwd() / ".paperforge" / "compute")
+        self.state_dir = validate_writable_path(
+            state_dir or Path.cwd() / ".paperforge" / "compute"
+        )
+        if self.state_dir.exists() and not self.state_dir.is_dir():
+            raise ValueError("compute state root must be a directory")
         self._state = ComputeStateStore(self.state_dir)
         self._specs: dict[str, JobSpec] = {}
         self._results: dict[str, JobResult] = {}
         self._lock = threading.RLock()
+
+    def _job_state_dir(self, job_id: str) -> Path:
+        safe_mkdir(self.state_dir)
+        return safe_mkdir(
+            self.state_dir / self.name / job_id,
+            anchor=self.state_dir,
+        )
+
+    def _job_state_path(self, job_id: str, name: str) -> Path:
+        return validate_writable_path(
+            self.state_dir / self.name / job_id / name
+        )
 
     def _job_id(self, spec: JobSpec) -> str:
         return spec.job_id or f"{spec.name}-{uuid.uuid4().hex[:12]}"
@@ -125,6 +145,31 @@ class ComputeBackend(ABC):
                 durable_spec = spec or self._specs.get(job_id)
                 if durable_spec is not None:
                     self._state.save(self.name, job_id, durable_spec, result)
+
+    def _persist_submission_intent(
+        self,
+        spec: JobSpec,
+        plan: JobResult,
+    ) -> JobResult:
+        intent = JobResult(
+            job_id=plan.job_id,
+            backend=self.name,
+            status=JobStatus.SUBMITTED,
+            executed=True,
+            plan=plan.plan,
+            message="submission intent persisted before external launch",
+            metadata={
+                **dict(plan.metadata),
+                "submission_intent": True,
+            },
+            created_at=plan.created_at,
+        )
+        self._remember(
+            plan.job_id,
+            spec=spec,
+            result=intent,
+        )
+        return intent
 
     def _known_spec(self, job_id: str) -> JobSpec:
         try:

@@ -1,17 +1,28 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
+import shutil
 import subprocess
+import tempfile
+import zipfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from engine.secret_redaction import redact_secrets
+from engine.secret_redaction import contains_secret, redact_command, redact_secrets
 
 from .models import utc_now
+from .path_safety import (
+    is_link_or_reparse_point,
+    reject_symlink_components,
+    safe_mkdir,
+    validate_writable_path,
+)
 
 
 class GitManagerError(RuntimeError):
@@ -76,6 +87,34 @@ class GitHubManager:
         if check and not result.success:
             detail = result.stderr.strip().splitlines()[-1:] or result.stdout.strip().splitlines()[-1:]
             raise GitManagerError(detail[0] if detail else "git command failed")
+        return result
+
+    def _run_gh(self, args: Sequence[str]) -> GitResult:
+        executable = shutil.which("gh")
+        if executable is None:
+            raise GitManagerError("GitHub CLI is required for approved remote actions")
+        command = (executable, *tuple(str(arg) for arg in args))
+        completed = subprocess.run(
+            command,
+            cwd=self.repository,
+            text=True,
+            capture_output=True,
+            check=False,
+            env={
+                **os.environ,
+                "GH_PROMPT_DISABLED": "1",
+                "GIT_TERMINAL_PROMPT": "0",
+            },
+        )
+        result = GitResult(
+            command=tuple(redact_command(("gh", *tuple(str(arg) for arg in args)))),
+            returncode=completed.returncode,
+            stdout=redact_secrets(completed.stdout),
+            stderr=redact_secrets(completed.stderr),
+        )
+        if not result.success:
+            detail = result.stderr.strip().splitlines()[-1:] or result.stdout.strip().splitlines()[-1:]
+            raise GitManagerError(detail[0] if detail else "GitHub CLI command failed")
         return result
 
     def initialize(self, *, default_branch: str = "main") -> str:
@@ -197,10 +236,48 @@ class GitHubManager:
     @staticmethod
     def _validate_remote_url(url: str) -> None:
         parsed = urlsplit(url)
-        if parsed.username or parsed.password:
+        if parsed.username or parsed.password or contains_secret(url):
             raise GitManagerError("remote URL must not contain credentials")
+        if parsed.query or parsed.fragment:
+            raise GitManagerError("remote URL must not contain a query or fragment")
         if parsed.scheme and parsed.scheme not in {"https", "ssh", "file"}:
             raise GitManagerError("unsupported remote URL scheme")
+
+    def _approved_remote_url(self, remote: str, *, approved: bool) -> str:
+        if not self.allow_remote or not approved:
+            raise GitApprovalRequired("remote Git actions require explicit approval")
+        remote_url = self._run(("remote", "get-url", remote)).stdout.strip()
+        self._validate_remote_url(remote_url)
+        return remote_url
+
+    @staticmethod
+    def _gh_repository_selector(remote_url: str) -> str:
+        """Convert a verified Git remote URL to GH's explicit HOST/OWNER/REPO form."""
+
+        parsed = urlsplit(remote_url)
+        if parsed.scheme in {"https", "ssh"}:
+            host = parsed.hostname or ""
+            path = parsed.path
+        elif "://" not in remote_url:
+            match = re.fullmatch(r"(?:[^@/\s]+@)?([^:/\s]+):(.+)", remote_url)
+            host = match.group(1) if match else ""
+            path = match.group(2) if match else ""
+        else:
+            host = ""
+            path = ""
+        parts = [part for part in path.strip("/").split("/") if part]
+        if len(parts) != 2 or not host:
+            raise GitManagerError(
+                "approved GitHub remote must identify HOST/OWNER/REPO"
+            )
+        owner, repository = parts
+        if repository.endswith(".git"):
+            repository = repository[:-4]
+        if not owner or not repository:
+            raise GitManagerError(
+                "approved GitHub remote must identify HOST/OWNER/REPO"
+            )
+        return f"{host}/{owner}/{repository}"
 
     def push(
         self,
@@ -210,15 +287,71 @@ class GitHubManager:
         approved: bool,
         set_upstream: bool = False,
     ) -> GitResult:
-        if not self.allow_remote or not approved:
-            raise GitApprovalRequired("remote Git actions require explicit approval")
-        remote_url = self._run(("remote", "get-url", remote)).stdout.strip()
-        self._validate_remote_url(remote_url)
+        self._approved_remote_url(remote, approved=approved)
         args = ["push"]
         if set_upstream:
             args.append("--set-upstream")
         args.extend((remote, refspec))
         return self._run(tuple(args))
+
+    def create_pull_request(
+        self,
+        *,
+        base: str,
+        head: str,
+        title: str,
+        body: str,
+        publish: bool = False,
+        approved: bool = False,
+        remote: str = "origin",
+    ) -> Path:
+        """Create a durable local PR record and optionally publish it remotely."""
+
+        cleaned_title = str(title).strip()
+        cleaned_body = str(body).strip()
+        if not cleaned_title:
+            raise ValueError("pull request title is required")
+        if contains_secret({"title": cleaned_title, "body": cleaned_body}):
+            raise GitManagerError("pull request metadata must not contain credentials")
+        record = self.create_pr_record(
+            base=base,
+            head=head,
+            title=cleaned_title,
+            body=cleaned_body,
+        )
+        if not publish:
+            return record
+        remote_url = self._approved_remote_url(remote, approved=approved)
+        repository = self._gh_repository_selector(remote_url)
+        outcome = self._run_gh(
+            (
+                "pr",
+                "create",
+                "--base",
+                base,
+                "--head",
+                head,
+                "--title",
+                cleaned_title,
+                "--body",
+                cleaned_body,
+                "--repo",
+                repository,
+            )
+        )
+        payload = json.loads(record.read_text(encoding="utf-8"))
+        payload.update(
+            {
+                "local_only": False,
+                "remote": remote,
+                "remote_url": outcome.stdout.strip(),
+            }
+        )
+        record.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return record
 
     def release_record(
         self,
@@ -232,8 +365,6 @@ class GitHubManager:
             path = Path(artifact).expanduser().resolve()
             if not path.is_file() or path.is_symlink():
                 raise FileNotFoundError(path)
-            import hashlib
-
             records.append(
                 {
                     "name": path.name,
@@ -262,3 +393,173 @@ class GitHubManager:
             encoding="utf-8",
         )
         return path
+
+    def publish_release(
+        self,
+        *,
+        tag: str,
+        artifacts: Sequence[str | Path],
+        title: str | None = None,
+        notes: str = "",
+        publish: bool = False,
+        approved: bool = False,
+        remote: str = "origin",
+    ) -> Path:
+        """Record a release locally and publish only with explicit authorization."""
+
+        cleaned_title = str(title or tag).strip()
+        cleaned_notes = str(notes).strip()
+        if not cleaned_title:
+            raise ValueError("release title is required")
+        if contains_secret({"title": cleaned_title, "notes": cleaned_notes}):
+            raise GitManagerError("release metadata must not contain credentials")
+        record = self.release_record(tag=tag, artifacts=artifacts)
+        if not publish:
+            return record
+        remote_url = self._approved_remote_url(remote, approved=approved)
+        repository = self._gh_repository_selector(remote_url)
+        artifact_paths = tuple(
+            str(Path(artifact).expanduser().resolve()) for artifact in artifacts
+        )
+        outcome = self._run_gh(
+            (
+                "release",
+                "create",
+                tag,
+                *artifact_paths,
+                "--title",
+                cleaned_title,
+                "--notes",
+                cleaned_notes,
+                "--repo",
+                repository,
+            )
+        )
+        payload = json.loads(record.read_text(encoding="utf-8"))
+        payload.update(
+            {
+                "remote_published": True,
+                "remote": remote,
+                "remote_url": outcome.stdout.strip(),
+            }
+        )
+        record.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return record
+
+    def create_research_archive(
+        self,
+        destination: str | Path,
+        *,
+        paths: Sequence[str | Path],
+        metadata: Mapping[str, Any] | None = None,
+    ) -> Path:
+        """Create a deterministic, secret-checked archive from an explicit allowlist."""
+
+        if not paths:
+            raise ValueError("research archive requires at least one allowlisted path")
+        destination_path = validate_writable_path(destination)
+        archive_metadata = dict(metadata or {})
+        if contains_secret(archive_metadata):
+            raise GitManagerError("research archive metadata must not contain credentials")
+        selected: dict[str, tuple[bytes, bool]] = {}
+        for raw in paths:
+            relative = Path(raw)
+            if (
+                relative.is_absolute()
+                or not relative.parts
+                or any(part in {"", ".", "..", ".git"} for part in relative.parts)
+            ):
+                raise ValueError(f"unsafe archive path: {raw}")
+            candidate = self.repository / relative
+            reject_symlink_components(candidate, anchor=self.repository)
+            if is_link_or_reparse_point(candidate) or not candidate.exists():
+                raise FileNotFoundError(candidate)
+            files = (candidate,) if candidate.is_file() else tuple(sorted(candidate.rglob("*")))
+            for source in files:
+                if source.is_dir():
+                    continue
+                same_destination = source.absolute() == destination_path
+                if not same_destination and destination_path.exists():
+                    try:
+                        same_destination = os.path.samefile(source, destination_path)
+                    except OSError:
+                        same_destination = False
+                if same_destination:
+                    continue
+                reject_symlink_components(source, anchor=self.repository)
+                if is_link_or_reparse_point(source) or not source.is_file():
+                    raise GitManagerError(f"archive source is not a regular file: {source}")
+                archive_name = source.relative_to(self.repository).as_posix()
+                if archive_name == "RESEARCH_ARCHIVE_MANIFEST.json":
+                    raise GitManagerError("archive source collides with the manifest")
+                payload = source.read_bytes()
+                if contains_secret(payload):
+                    raise GitManagerError(f"archive source contains credentials: {archive_name}")
+                selected[archive_name] = (
+                    payload,
+                    bool(source.stat().st_mode & 0o111),
+                )
+        if not selected:
+            raise ValueError("research archive allowlist contains no files")
+
+        records = [
+            {
+                "path": name,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "size_bytes": len(payload),
+            }
+            for name, (payload, _) in sorted(selected.items())
+        ]
+        manifest = json.dumps(
+            {
+                "schema": "paperforge.research-archive/v1",
+                "commit": self.head(allow_unborn=True),
+                "files": records,
+                "metadata": archive_metadata,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ).encode("utf-8") + b"\n"
+        parent = safe_mkdir(destination_path.parent)
+        destination_path = parent / destination_path.name
+        reject_symlink_components(destination_path, anchor=parent)
+        if is_link_or_reparse_point(destination_path) or (
+            destination_path.exists() and not destination_path.is_file()
+        ):
+            raise GitManagerError("research archive destination is unsafe")
+        temporary: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=parent,
+                prefix=f".{destination_path.name}.",
+                delete=False,
+            ) as stream:
+                temporary = stream.name
+            with zipfile.ZipFile(
+                temporary,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+                compresslevel=9,
+            ) as archive:
+                for name, (payload, executable) in sorted(selected.items()):
+                    info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                    info.compress_type = zipfile.ZIP_DEFLATED
+                    info.external_attr = (0o755 if executable else 0o644) << 16
+                    archive.writestr(info, payload)
+                info = zipfile.ZipInfo(
+                    "RESEARCH_ARCHIVE_MANIFEST.json",
+                    date_time=(1980, 1, 1, 0, 0, 0),
+                )
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = 0o644 << 16
+                archive.writestr(info, manifest)
+            os.replace(temporary, destination_path)
+            temporary = None
+        finally:
+            if temporary is not None:
+                Path(temporary).unlink(missing_ok=True)
+        return destination_path

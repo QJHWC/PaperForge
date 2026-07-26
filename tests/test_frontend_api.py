@@ -357,10 +357,16 @@ class FrontendApiTest(unittest.TestCase):
         self,
     ) -> None:
         from paperforge.api import PaperForgeService
+        from paperforge.experiments import ExperimentManager
 
         service = PaperForgeService(self.workspace)
         handle = service.run(profile="writing-only")
-        service.approve("proposal-demo")
+        proposal = ExperimentManager(
+            self.workspace,
+            profile="full",
+            memory=service.memory,
+        ).propose(title="Frontend approval fixture")
+        service.approve(proposal.proposal_id)
         (self.workspace / "paper.pdf").write_bytes(b"%PDF-1.4")
         gate = {
             "claim_gate_passed": True,
@@ -381,7 +387,10 @@ class FrontendApiTest(unittest.TestCase):
         self.assertEqual(data["profile"], "writing-only")
         self.assertEqual(data["resume"]["workflow_id"], handle.run_id)
         self.assertTrue(data["resume"]["available"])
-        self.assertEqual(data["approvals"][0]["proposal_id"], "proposal-demo")
+        self.assertEqual(
+            data["approvals"][0]["proposal_id"],
+            proposal.proposal_id,
+        )
         self.assertFalse(data["release_gate"]["passed"])
         self.assertEqual(data["release_gate"]["source"], "frontend-derived")
         self.assertIn(

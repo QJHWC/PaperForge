@@ -10,6 +10,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol, cast, runtime_checkable
 
+from engine.secret_redaction import redact_structure
+
 from .artifacts import ArtifactStore, sha256_file
 from .models import utc_now
 
@@ -49,6 +51,7 @@ class AgentResultStatus(str, Enum):
     ACCEPTED = "ACCEPTED"
     COMPLETED = "COMPLETED"
     SUCCESS = "COMPLETED"
+    SKIPPED = "SKIPPED"
     BLOCKED = "BLOCKED"
     FAILED = "FAILED"
 
@@ -161,12 +164,14 @@ class PersistentTraceStore:
         normalized_name = self._normalize_name(name)
         created_at = utc_now()
         trace_id = f"trace_{uuid.uuid4().hex}"
+        safe_payload = redact_structure(payload)
+        safe_metadata = redact_structure(dict(metadata or {}))
         envelope: dict[str, Any] = {
             "schema_version": TRACE_SCHEMA_VERSION,
             "trace_id": trace_id,
             "created_at": created_at,
-            "payload": payload,
-            "metadata": dict(metadata or {}),
+            "payload": safe_payload,
+            "metadata": safe_metadata,
         }
         canonical = json.dumps(
             envelope,
@@ -180,7 +185,7 @@ class PersistentTraceStore:
             relative_path,
             envelope,
             kind="trace",
-            metadata=metadata,
+            metadata=safe_metadata,
         )
         return TraceInput(
             trace_id=trace_id,
@@ -188,7 +193,7 @@ class PersistentTraceStore:
             sha256=record.sha256,
             size_bytes=record.size_bytes,
             created_at=created_at,
-            metadata=dict(metadata or {}),
+            metadata=safe_metadata,
         )
 
     def verify(self, trace: TraceInput) -> bool:
@@ -343,6 +348,19 @@ class AgentResult:
             output=dict(output or {}),
             artifacts=tuple(artifacts),
             trace_outputs=tuple(trace_outputs),
+        )
+
+    @classmethod
+    def skipped(
+        cls,
+        request: AgentRequest,
+        output: Mapping[str, Any] | None = None,
+    ) -> AgentResult:
+        return cls(
+            request_id=request.request_id,
+            role=request.role,
+            status=AgentResultStatus.SKIPPED,
+            output=dict(output or {}),
         )
 
     @classmethod

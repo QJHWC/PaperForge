@@ -139,6 +139,25 @@ class InvariantSnapshot:
     claim_segments: tuple[str, ...]
     semantic_sha256: str
 
+    @staticmethod
+    def _sequence_sha256(values: tuple[str, ...]) -> str:
+        payload = "\x1e".join(values).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    def fingerprint(self) -> dict[str, str]:
+        return {
+            "protected_blocks_sha256": self._sequence_sha256(
+                self.protected_blocks
+            ),
+            "citations_sha256": self._sequence_sha256(self.citations),
+            "numbers_sha256": self._sequence_sha256(self.numbers),
+            "claim_texts_sha256": self._sequence_sha256(self.claim_texts),
+            "claim_segments_sha256": self._sequence_sha256(
+                self.claim_segments
+            ),
+            "semantic_sha256": self.semantic_sha256,
+        }
+
     @classmethod
     def capture(
         cls,

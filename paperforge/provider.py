@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -12,6 +15,14 @@ from engine.secret_redaction import redact_secrets
 
 
 class ProviderConfigurationError(ValueError):
+    pass
+
+
+class ProviderAuthenticationError(RuntimeError):
+    pass
+
+
+class ProviderRequestError(RuntimeError):
     pass
 
 
@@ -49,6 +60,142 @@ class ProviderPreflightReport:
         return asdict(self)
 
 
+class ProviderPreflightCache:
+    """Credential-bound provider status with no credential material on disk."""
+
+    _TTL_SECONDS = {
+        "AUTH_BLOCKED": 24 * 60 * 60,
+        "EXTERNAL_SERVICE_VERIFIED": 24 * 60 * 60,
+        "FAILED": 5 * 60,
+    }
+
+    def __init__(
+        self,
+        *,
+        env: Mapping[str, str] | None = None,
+        config_dir: Path | None = None,
+    ) -> None:
+        environment = dict(os.environ if env is None else env)
+        self.config_dir = config_dir or (
+            Path(environment.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+            / "paperforge"
+        )
+        self.path = self.config_dir / "provider-preflight.json"
+
+    @staticmethod
+    def fingerprint(config: ProviderConfig, credential: str) -> str:
+        payload = "\x00".join(
+            (config.provider, config.model, config.base_url or "", credential)
+        )
+        return sha256(payload.encode("utf-8")).hexdigest()
+
+    def _read(self) -> dict[str, Any]:
+        if not self.path.exists():
+            return {"schema": "paperforge.provider-preflight/v1", "entries": {}}
+        if self.path.is_symlink():
+            raise ProviderConfigurationError(
+                "provider preflight cache must not be a symbolic link"
+            )
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ProviderConfigurationError(
+                "provider preflight cache is unreadable"
+            ) from exc
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema") != "paperforge.provider-preflight/v1"
+            or not isinstance(payload.get("entries"), dict)
+        ):
+            raise ProviderConfigurationError(
+                "provider preflight cache has an unsupported schema"
+            )
+        return payload
+
+    def load(
+        self,
+        config: ProviderConfig,
+        credential: str,
+    ) -> ProviderPreflightReport | None:
+        entry = self._read()["entries"].get(
+            self.fingerprint(config, credential)
+        )
+        if not isinstance(entry, dict):
+            return None
+        try:
+            checked_at = datetime.fromisoformat(str(entry["checked_at"]))
+            if checked_at.tzinfo is None:
+                checked_at = checked_at.replace(tzinfo=timezone.utc)
+            status = str(entry["status"])
+            ttl = self._TTL_SECONDS.get(status, 0)
+            age = (
+                datetime.now(timezone.utc) - checked_at.astimezone(timezone.utc)
+            ).total_seconds()
+            if age < 0 or age > ttl:
+                return None
+            return ProviderPreflightReport(
+                provider=str(entry["provider"]),
+                model=str(entry["model"]),
+                status=status,
+                detail=str(entry["detail"]),
+                response_received=bool(entry.get("response_received", False)),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ProviderConfigurationError(
+                "provider preflight cache entry is incomplete"
+            ) from exc
+
+    def store(
+        self,
+        config: ProviderConfig,
+        credential: str,
+        report: ProviderPreflightReport,
+    ) -> None:
+        if self.config_dir.is_symlink():
+            raise ProviderConfigurationError(
+                "PaperForge user config directory must not be a symbolic link"
+            )
+        self.config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if os.name != "nt":
+            self.config_dir.chmod(0o700)
+        payload = self._read()
+        entries = dict(payload["entries"])
+        entries[self.fingerprint(config, credential)] = {
+            **report.to_dict(),
+            "checked_at": datetime.now(timezone.utc).isoformat(
+                timespec="seconds"
+            ),
+        }
+        payload["entries"] = entries
+        temporary: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self.config_dir,
+                prefix=".provider-preflight.",
+                delete=False,
+            ) as handle:
+                json.dump(
+                    payload,
+                    handle,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+                temporary = handle.name
+            os.replace(temporary, self.path)
+            temporary = None
+            if os.name != "nt":
+                self.path.chmod(0o600)
+        finally:
+            if temporary is not None:
+                Path(temporary).unlink(missing_ok=True)
+
+
 def sanitize_url(value: str | None) -> str | None:
     if not value:
         return None
@@ -83,7 +230,7 @@ class CredentialResolver:
         env: Mapping[str, str] | None = None,
         config_dir: Path | None = None,
     ) -> None:
-        self.env = dict(env or os.environ)
+        self.env = dict(os.environ if env is None else env)
         self.config_dir = config_dir or (
             Path(self.env.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "paperforge"
         )
@@ -119,7 +266,7 @@ class CredentialResolver:
 
 class ProviderRegistry:
     def __init__(self, *, env: Mapping[str, str] | None = None) -> None:
-        self.env = dict(env or os.environ)
+        self.env = dict(os.environ if env is None else env)
 
     def resolve(self, model: str, *, stage: str = "default") -> ProviderConfig:
         if model == "bailu-turing":
@@ -255,6 +402,91 @@ def create_chat_completion(
         **parameters,
     )
     return client.chat.completions.create(**payload)
+
+
+def chat_completion_text(
+    model: str,
+    *,
+    messages: Any,
+    stage: str = "writeup",
+    registry: ProviderRegistry | None = None,
+    client: Any | None = None,
+    **parameters: Any,
+) -> str:
+    """Execute one non-streaming request through the shared provider contract."""
+
+    resolved_registry = registry or ProviderRegistry()
+    config = resolved_registry.resolve(model, stage=stage)
+    credential = resolved_registry.credential(config)
+    if not credential:
+        raise ProviderAuthenticationError(
+            f"{config.provider} credential is not configured"
+        )
+    request_client = client
+    if request_client is None:
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise ProviderRequestError(
+                "the OpenAI-compatible client dependency is unavailable"
+            ) from exc
+        request_client = OpenAI(
+            **resolved_registry.openai_client_kwargs(config),
+            max_retries=0,
+            timeout=120.0,
+        )
+    cache = ProviderPreflightCache(env=resolved_registry.env)
+    preflight = cache.load(config, credential)
+    if preflight is None:
+        preflight = preflight_openai_compatible(
+            config,
+            client=request_client,
+        )
+        cache.store(config, credential, preflight)
+    if preflight.status == "AUTH_BLOCKED":
+        raise ProviderAuthenticationError(preflight.detail)
+    if preflight.status != "EXTERNAL_SERVICE_VERIFIED":
+        raise ProviderRequestError(
+            f"provider preflight failed: {preflight.detail}"
+        )
+    payload = ProviderRequestBuilder.build(
+        config,
+        messages=messages,
+        stream=False,
+        **parameters,
+    )
+    try:
+        response = request_client.chat.completions.create(**payload)
+    except Exception as exc:
+        status_code = getattr(exc, "status_code", None)
+        safe_error = redact_secrets(str(exc))
+        if status_code in {401, 403} or "401" in safe_error or "403" in safe_error:
+            cache.store(
+                config,
+                credential,
+                ProviderPreflightReport(
+                    provider=config.provider,
+                    model=config.model,
+                    status="AUTH_BLOCKED",
+                    detail="provider rejected the configured credential",
+                ),
+            )
+            raise ProviderAuthenticationError(
+                "provider rejected the configured credential"
+            ) from exc
+        detail = safe_error.splitlines()[0][:240] if safe_error else type(exc).__name__
+        raise ProviderRequestError(
+            f"{type(exc).__name__}: {detail}"
+        ) from exc
+    choices = getattr(response, "choices", None) or ()
+    content = (
+        getattr(getattr(choices[0], "message", None), "content", None)
+        if choices
+        else None
+    )
+    if not isinstance(content, str) or not content.strip():
+        raise ProviderRequestError("chat completion returned no message content")
+    return content.strip()
 
 
 def build_aider_model(

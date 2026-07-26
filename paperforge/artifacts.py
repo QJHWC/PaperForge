@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from engine.secret_redaction import redact_secrets, redact_structure
+
 from .models import ArtifactTier, utc_now
 from .scientific_memory import ScientificMemory, _stable_id
 
@@ -291,6 +293,7 @@ class ArtifactStore:
         normalized_kind = self._normalize_kind(kind)
         digest = sha256_file(path)
         normalized_tier = _normalize_tier(tier)
+        safe_metadata = redact_structure(dict(metadata or {}))
         record = ArtifactRecord(
             artifact_id=_stable_id("artifact", relative_path, digest, normalized_kind),
             path=relative_path,
@@ -302,7 +305,7 @@ class ArtifactStore:
             tier=normalized_tier,
             status=str(status),
             media_type=media_type,
-            metadata=dict(metadata or {}),
+            metadata=safe_metadata,
         )
         if track:
             self._records[relative_path] = record
@@ -418,9 +421,10 @@ class ArtifactStore:
         encoding: str = "utf-8",
         **kwargs: Any,
     ) -> ArtifactRecord:
+        safe_content = redact_secrets(content)
         return self.write_bytes(
             relative_path,
-            content.encode(encoding),
+            safe_content.encode(encoding),
             kind=kind,
             **kwargs,
         )
@@ -435,7 +439,7 @@ class ArtifactStore:
         **kwargs: Any,
     ) -> ArtifactRecord:
         rendered = json.dumps(
-            payload,
+            redact_structure(payload),
             ensure_ascii=False,
             indent=indent,
             sort_keys=True,
@@ -462,7 +466,7 @@ class ArtifactStore:
             "workspace": ".",
             "generated_at": utc_now(),
             "artifacts": [record.to_dict() for record in self.records],
-            "metadata": dict(metadata or {}),
+            "metadata": redact_structure(dict(metadata or {})),
         }
         payload["manifest_sha256"] = sha256_bytes(_canonical_json(payload))
         return payload

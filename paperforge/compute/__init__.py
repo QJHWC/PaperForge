@@ -9,6 +9,14 @@ from .base import (
     SubprocessCommandRunner,
     UnknownJobError,
 )
+from .binding import (
+    COMPUTE_BINDING_SCHEMA,
+    COMPUTE_JOB_MANIFEST_SCHEMA,
+    ComputeBindingError,
+    build_compute_binding,
+    job_manifest_inputs,
+    verify_compute_binding,
+)
 from .cloud_ssh import (
     CloudSSHBackend,
     CloudSSHComputeBackend,
@@ -49,11 +57,14 @@ __all__ = [
     "CloudSSHBackend",
     "CloudSSHComputeBackend",
     "CloudSSHConfig",
+    "COMPUTE_BINDING_SCHEMA",
+    "COMPUTE_JOB_MANIFEST_SCHEMA",
     "CommandOutcome",
     "CommandPlan",
     "CommandRunner",
     "ComputeBackend",
     "ComputeBackendRegistry",
+    "ComputeBindingError",
     "DockerBackend",
     "DockerComputeBackend",
     "DockerConfig",
@@ -79,4 +90,7 @@ __all__ = [
     "UnknownJobError",
     "backend_registry",
     "create_backend",
+    "build_compute_binding",
+    "job_manifest_inputs",
+    "verify_compute_binding",
 ]

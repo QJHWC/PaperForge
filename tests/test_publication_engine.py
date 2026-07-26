@@ -362,6 +362,9 @@ def test_publication_engine_runs_at_most_three_verified_rounds(tmp_path: Path) -
         result.manifest_path.read_text(encoding="utf-8")
     )
     assert publication_manifest["project_root"] == "."
+    assert publication_manifest["source_invariants"]["entrypoint_sha256"]
+    assert publication_manifest["source_invariants"]["bibliography_sha256"]
+    assert publication_manifest["source_invariants"]["semantic_sha256"]
     assert str(tmp_path) not in json.dumps(publication_manifest["rounds"])
     assert callable(publish)
 

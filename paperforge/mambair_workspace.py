@@ -12,6 +12,10 @@ from .claim_manifest import LatexClaimUnit, import_latex_claims
 from .models import ArtifactTier, ClaimStatus, ClaimType
 from .protected_blocks import protected_blocks_sha256
 from .publication import PublicationEngine
+from .publication.visual_checks import (
+    inspect_page_structure,
+    inspect_rendered_pages,
+)
 from .release import ReleaseVerifier, write_page_inspection
 from .scientific_memory import ScientificMemory
 
@@ -92,7 +96,10 @@ def build_workspace(workspace: str | Path) -> dict[str, Any]:
     if missing:
         raise FileNotFoundError("workspace inputs are incomplete: " + ", ".join(missing))
 
-    memory = ScientificMemory(root / ".paperforge" / "paperforge.db")
+    memory = ScientificMemory(
+        root / ".paperforge" / "paperforge.db",
+        trusted_root=root,
+    )
     model_evidence = _source_evidence(memory, source, "models/mambair_gppnn.py")
     routing_evidence = _source_evidence(memory, source, "models/dual_modal_assm.py")
     fusion_evidence = _source_evidence(memory, source, "models/cross_modal_attention.py")
@@ -236,11 +243,23 @@ def build_workspace(workspace: str | Path) -> dict[str, Any]:
     final_render = publication.rounds[-1].render_result
     if final_render is None or not final_render.success:
         raise RuntimeError("publication has no verified rendered pages")
+    render_integrity = inspect_rendered_pages(final_render.pages)
+    structural_review = inspect_page_structure(
+        final_pdf,
+        final_render.pages,
+        render_integrity=render_integrity,
+        expected_text_by_page={
+            1: ("MambaIR-GPPNN",)
+        },
+    )
     write_page_inspection(
         root,
         pdf_path=final_pdf,
         rendered_pages=final_render.pages,
-        reviewer="PaperForge publication renderer and layout diagnostician",
+        reviewer="PaperForge deterministic structural page reviewer",
+        inspection_kind="automated-structural",
+        render_integrity=render_integrity,
+        structural_review=structural_review,
     )
     store.register(
         "artifacts/page-inspection.json",

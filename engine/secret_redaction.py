@@ -276,3 +276,31 @@ def redact_structure(
     if isinstance(value, os.PathLike):
         return redact_secrets(os.fspath(value), secret_values=values)
     return value
+
+
+def contains_secret(value: Any) -> bool:
+    """Return True when a JSON-like value would require secret redaction."""
+
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if _is_secret_field(key) and item not in (None, ""):
+                return True
+            normalized_key = _normalize_field_name(key)
+            if normalized_key in {"command", "argv", "args"} and isinstance(
+                item, str | Sequence
+            ):
+                original = [item] if isinstance(item, str) else [str(part) for part in item]
+                if redact_command(item) != original:
+                    return True
+            if contains_secret(item):
+                return True
+        return False
+    if isinstance(value, list | tuple | set | frozenset):
+        return any(contains_secret(item) for item in value)
+    if isinstance(value, bytes):
+        rendered = value.decode("utf-8", errors="replace")
+        return redact_secrets(rendered) != rendered
+    if isinstance(value, str | os.PathLike):
+        rendered = os.fspath(value)
+        return redact_secrets(rendered) != rendered
+    return False

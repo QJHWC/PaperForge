@@ -8,11 +8,16 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from engine.secret_redaction import redact_secrets
+from engine.secret_redaction import contains_secret, redact_secrets
 
 from .api import load_service
+from .compute import job_manifest_inputs
 from .models import ExecutionProfile
-from .provider import ProviderRegistry, preflight_openai_compatible
+from .provider import (
+    ProviderPreflightCache,
+    ProviderRegistry,
+    preflight_openai_compatible,
+)
 
 _FORBIDDEN_SECRET_OPTIONS = {
     "--api-key",
@@ -22,6 +27,24 @@ _FORBIDDEN_SECRET_OPTIONS = {
     "--auth-token",
     "--password",
 }
+_MAX_JOB_MANIFEST_BYTES = 1024 * 1024
+WRITING_JOB_MANIFEST_SCHEMA = "paperforge.writing-job/v1"
+_WRITING_MANIFEST_FIELDS = frozenset(
+    {
+        "abstract",
+        "bibliography_path",
+        "claim_ids",
+        "document_path",
+        "instructions",
+        "main_tex",
+        "main_tex_path",
+        "outline",
+        "reference_paths",
+        "template",
+        "title",
+        "topic",
+    }
+)
 
 
 def _emit(payload: Any) -> None:
@@ -36,6 +59,74 @@ def _reject_secret_argv(argv: Sequence[str]) -> None:
             raise SystemExit(
                 f"{option} is forbidden; store credentials in the PaperForge user config directory"
             )
+
+
+def _load_job_manifest(
+    workspace: Path,
+    raw_path: str,
+    *,
+    profile: ExecutionProfile | str,
+) -> dict[str, Any]:
+    lexical = Path(raw_path).expanduser()
+    lexical = lexical if lexical.is_absolute() else workspace / lexical
+    if lexical.is_symlink():
+        raise ValueError("job manifest must not be a symbolic link")
+    path = lexical.resolve(strict=True)
+    if workspace != path and workspace not in path.parents:
+        raise ValueError("job manifest must be inside the workspace")
+    if not path.is_file() or path.stat().st_size > _MAX_JOB_MANIFEST_BYTES:
+        raise ValueError("job manifest is missing or exceeds 1 MiB")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("job manifest must contain a JSON object")
+    if contains_secret(payload):
+        raise ValueError("job manifest must not contain credentials")
+    normalized_profile = ExecutionProfile(profile)
+    if normalized_profile is ExecutionProfile.FULL:
+        return job_manifest_inputs(payload)
+    if normalized_profile is not ExecutionProfile.WRITING_ONLY:
+        raise ValueError("research profile does not accept a job manifest")
+    if payload.get("schema") != WRITING_JOB_MANIFEST_SCHEMA:
+        raise ValueError(
+            f"writing manifest schema must be {WRITING_JOB_MANIFEST_SCHEMA}"
+        )
+    unknown = sorted(set(payload) - {"schema"} - _WRITING_MANIFEST_FIELDS)
+    if unknown:
+        raise ValueError(
+            "writing manifest contains unsupported fields: "
+            + ", ".join(unknown)
+        )
+    normalized = {
+        str(key): value for key, value in payload.items() if key != "schema"
+    }
+    if not normalized:
+        raise ValueError("writing manifest must contain a writing request")
+    return normalized
+
+
+def _add_writing_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--title", default=None)
+    parser.add_argument("--topic", default=None)
+    parser.add_argument("--abstract", default=None)
+    parser.add_argument("--instructions", default=None)
+    parser.add_argument("--main-tex", default=None)
+    parser.add_argument("--bibliography", default=None)
+
+
+def _writing_cli_inputs(args: argparse.Namespace) -> dict[str, str]:
+    values = {
+        "title": getattr(args, "title", None),
+        "topic": getattr(args, "topic", None),
+        "abstract": getattr(args, "abstract", None),
+        "instructions": getattr(args, "instructions", None),
+        "main_tex": getattr(args, "main_tex", None),
+        "bibliography_path": getattr(args, "bibliography", None),
+    }
+    return {
+        key: str(value)
+        for key, value in values.items()
+        if value is not None and str(value).strip()
+    }
 
 
 def _static_preflight(workspace: Path) -> dict[str, Any]:
@@ -88,7 +179,13 @@ def _live_provider_preflight(model: str) -> dict[str, Any]:
         max_retries=0,
         timeout=20.0,
     )
-    return preflight_openai_compatible(config, client=client).to_dict()
+    report = preflight_openai_compatible(config, client=client)
+    ProviderPreflightCache(env=registry.env).store(
+        config,
+        credential,
+        report,
+    )
+    return report.to_dict()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -114,11 +211,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--proposal-id", default=None)
     run.add_argument("--idempotency-key", default=None)
+    run.add_argument("--job-manifest", default=None)
+    _add_writing_arguments(run)
 
     approve = subparsers.add_parser("approve")
     approve.add_argument("--proposal-id", required=True)
     approve.add_argument("--workspace", default=".")
-    approve.add_argument("--scope", choices=["static", "mini", "full"], default="mini")
+    approve.add_argument("--scope", choices=["static", "mini", "full"], default="full")
+
+    experiment = subparsers.add_parser("experiment")
+    experiment.add_argument("--proposal-id", required=True)
+    experiment.add_argument("--workspace", default=".")
+    experiment.add_argument(
+        "--stage",
+        required=True,
+        choices=["static_check", "mini_experiment"],
+    )
 
     resume = subparsers.add_parser("resume")
     resume.add_argument("--workspace", default=".")
@@ -149,6 +257,9 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         compatibility = subparsers.add_parser(alias)
         compatibility.add_argument("--workspace", default=".")
+        if alias == "writeup":
+            compatibility.add_argument("--job-manifest", default=None)
+            _add_writing_arguments(compatibility)
         compatibility.set_defaults(compatibility_profile=profile, legacy_mode=alias)
 
     return parser
@@ -170,9 +281,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if hasattr(args, "compatibility_profile"):
         _, service = load_service(args.workspace, profile=args.compatibility_profile)
+        compatibility_inputs = None
+        if args.legacy_mode == "writeup":
+            workspace = Path(args.workspace).expanduser().resolve()
+            compatibility_inputs = (
+                _load_job_manifest(
+                    workspace,
+                    args.job_manifest,
+                    profile=ExecutionProfile.WRITING_ONLY,
+                )
+                if args.job_manifest
+                else {}
+            )
+            compatibility_inputs.update(_writing_cli_inputs(args))
         result = service.run(
             profile=args.compatibility_profile,
             legacy_mode=args.legacy_mode,
+            inputs=compatibility_inputs,
         )
         _emit(result.to_dict())
         return 0
@@ -182,11 +307,38 @@ def main(argv: Sequence[str] | None = None) -> int:
         profile=getattr(args, "profile", None),
     )
     if args.command == "run":
+        workspace = Path(args.workspace).expanduser().resolve()
+        run_inputs: dict[str, Any] = (
+            _load_job_manifest(
+                workspace,
+                args.job_manifest,
+                profile=args.profile,
+            )
+            if args.job_manifest
+            else {}
+        )
+        writing_inputs = _writing_cli_inputs(args)
+        if (
+            writing_inputs
+            and ExecutionProfile(args.profile)
+            is not ExecutionProfile.WRITING_ONLY
+        ):
+            raise ValueError(
+                "writing arguments require --profile writing-only"
+            )
+        overlap = sorted(set(run_inputs) & set(writing_inputs))
+        if overlap:
+            raise ValueError(
+                "writing argument duplicates manifest fields: "
+                + ", ".join(overlap)
+            )
+        run_inputs.update(writing_inputs)
         result = service.run(
             profile=args.profile,
             legacy_mode=args.legacy_mode,
             proposal_id=args.proposal_id,
             idempotency_key=args.idempotency_key,
+            inputs=run_inputs or None,
         )
         _emit(result.to_dict())
     elif args.command == "approve":
@@ -194,6 +346,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             service.approve(
                 args.proposal_id,
                 scope={"maximum_stage": args.scope},
+            )
+        )
+    elif args.command == "experiment":
+        _emit(
+            service.execute_experiment_stage(
+                args.proposal_id,
+                args.stage,
             )
         )
     elif args.command == "resume":

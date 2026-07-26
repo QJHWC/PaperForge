@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,22 @@ def test_registry_covers_v3_roles_and_dispatches_typed_trace_inputs(
         registry.dispatch(request)
 
 
+def test_persistent_trace_store_redacts_payload_and_metadata(
+    tmp_path: Path,
+) -> None:
+    secret = "sk-" + ("t" * 24)
+    store = PersistentTraceStore(tmp_path)
+
+    trace = store.persist(
+        {"command": ["tool", "--api-key", secret]},
+        metadata={"api_key": secret},
+    )
+    persisted = (tmp_path / trace.path).read_text(encoding="utf-8")
+
+    assert secret not in persisted
+    assert secret not in repr(trace.metadata)
+
+
 def test_artifact_store_restricts_paths_and_verifies_manifest(tmp_path: Path) -> None:
     store = ArtifactStore(
         tmp_path,
@@ -130,11 +147,16 @@ def test_experiment_state_machine_records_hashes_and_claim_eligibility(
     checkpoint = tmp_path / "artifacts" / "model.ckpt"
     metrics = tmp_path / "artifacts" / "metrics.json"
     for path, content in (
-        (code, "print('train')\n"),
+        (
+            code,
+            "from pathlib import Path\n"
+            "Path('artifacts').mkdir(exist_ok=True)\n"
+            "Path('artifacts/model.ckpt').write_text('weights', encoding='utf-8')\n"
+            "Path('artifacts/metrics.json').write_text("
+            "'{\"accuracy\": 0.8}', encoding='utf-8')\n",
+        ),
         (config, '{"seed": 7}\n'),
         (data, "x,y\n1,2\n"),
-        (checkpoint, "weights"),
-        (metrics, '{"accuracy": 0.8}\n'),
     ):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
@@ -146,6 +168,26 @@ def test_experiment_state_machine_records_hashes_and_claim_eligibility(
         code_paths=("src/train.py",),
         config_paths=("configs/run.json",),
         data_paths=("data/sample.csv",),
+        output_paths=(
+            "artifacts/model.ckpt",
+            "artifacts/metrics.json",
+        ),
+        stage_job_specs={
+            "static_check": {
+                "name": "static-check",
+                "command": [sys.executable, "-c", "print('static')"],
+                "execute": True,
+                "metadata": {"estimated_cost": 0.1},
+            },
+            "mini_experiment": {
+                "name": "mini-check",
+                "command": [sys.executable, "-c", "print('mini')"],
+                "execute": True,
+                "metadata": {"estimated_cost": 0.2},
+            },
+        },
+        estimated_cost=0.5,
+        cost_limit=2.0,
     )
 
     with pytest.raises(PermissionError):
@@ -198,11 +240,6 @@ def test_experiment_state_machine_records_hashes_and_claim_eligibility(
         proposal.proposal_id,
         ExperimentStage.FULL_EXPERIMENT,
         provenance_kind=ProvenanceKind.MEASURED,
-        executor=lambda *_: {
-            "returncode": 0,
-            "metrics_paths": ("artifacts/metrics.json",),
-            "checkpoint_paths": ("artifacts/model.ckpt",),
-        },
         checkpoint_paths=("artifacts/model.ckpt",),
         metrics_paths=("artifacts/metrics.json",),
     )

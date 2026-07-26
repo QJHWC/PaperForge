@@ -5,6 +5,7 @@ import json
 import math
 import os
 import subprocess
+import time
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
@@ -12,6 +13,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from engine.secret_redaction import contains_secret
+
+from .compute.binding import build_compute_binding, verify_compute_binding
+from .compute.contracts import ArtifactDirection, JobSpec, JobStatus
+from .compute.local import LocalBackend
 from .models import (
     ExecutionProfile,
     ExperimentStage,
@@ -103,6 +109,10 @@ def _normalize_paths(values: Iterable[str | Path] | str | Path | None) -> tuple[
     normalized: list[str] = []
     for value in raw_values:
         raw = os.fspath(value)
+        if contains_secret(raw):
+            raise ExperimentIntegrityError(
+                "experiment provenance path must not contain credentials"
+            )
         path = Path(raw)
         if (
             not raw
@@ -128,11 +138,15 @@ def _normalize_command(command: Sequence[str] | None) -> tuple[str, ...]:
     normalized = tuple(str(part) for part in command)
     if any(not part or "\x00" in part for part in normalized):
         raise ValueError("experiment command contains an empty or invalid argument")
+    if contains_secret({"command": normalized}):
+        raise ValueError("experiment command must not contain credentials")
     return normalized
 
 
 def _json_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
     normalized = dict(value or {})
+    if contains_secret(normalized):
+        raise ValueError("experiment metadata must not contain credentials")
     try:
         json.dumps(normalized, ensure_ascii=False, sort_keys=True)
     except (TypeError, ValueError) as exc:
@@ -149,6 +163,7 @@ class ExperimentProposal:
     code_paths: tuple[str, ...] = ()
     config_paths: tuple[str, ...] = ()
     data_paths: tuple[str, ...] = ()
+    output_paths: tuple[str, ...] = ()
     cost_limit: float | None = None
     risk_level: str | None = None
     created_at: str = ""
@@ -170,6 +185,7 @@ class ExperimentProposal:
         payload["code_paths"] = list(self.code_paths)
         payload["config_paths"] = list(self.config_paths)
         payload["data_paths"] = list(self.data_paths)
+        payload["output_paths"] = list(self.output_paths)
         payload["metadata"] = dict(self.metadata)
         return payload
 
@@ -242,7 +258,8 @@ class ExperimentManager:
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.policy = ExecutionPolicy.from_value(profile)
         self.memory = memory or ScientificMemory(
-            self.workspace / ".paperforge" / "paperforge.db"
+            self.workspace / ".paperforge" / "paperforge.db",
+            trusted_root=self.workspace,
         )
 
     @property
@@ -329,6 +346,100 @@ class ExperimentManager:
         ).hexdigest()
         return aggregate, entries
 
+    def _output_hashes(
+        self,
+        paths: tuple[str, ...],
+    ) -> dict[str, str | None]:
+        hashes: dict[str, str | None] = {}
+        for relative_path in paths:
+            lexical = self.workspace / relative_path
+            current = self.workspace
+            for part in Path(relative_path).parts:
+                current /= part
+                if current.is_symlink():
+                    raise ExperimentIntegrityError(
+                        f"experiment output contains a symlink: {relative_path}"
+                    )
+                if not current.exists():
+                    break
+            resolved = lexical.resolve(strict=False)
+            if resolved == self.workspace or self.workspace not in resolved.parents:
+                raise ExperimentIntegrityError(
+                    f"experiment output escapes workspace: {relative_path}"
+                )
+            hashes[relative_path] = (
+                self._hash_one(relative_path) if resolved.exists() else None
+            )
+        return hashes
+
+    def _validate_stage_bindings(
+        self,
+        stage_bindings: Mapping[str, Any],
+        *,
+        full_command: tuple[str, ...],
+        require_complete: bool,
+    ) -> dict[str, dict[str, Any]]:
+        normalized: dict[str, dict[str, Any]] = {}
+        allowed = {"static_check", "mini_experiment"}
+        unknown = sorted(set(stage_bindings) - allowed)
+        if unknown:
+            raise ExperimentIntegrityError(
+                "unsupported experiment stage bindings: " + ", ".join(unknown)
+            )
+        if require_complete and set(stage_bindings) != allowed:
+            raise ExperimentIntegrityError(
+                "executable experiments require static_check and mini_experiment bindings"
+            )
+        for stage_name, raw_binding in stage_bindings.items():
+            if not isinstance(raw_binding, Mapping):
+                raise ExperimentIntegrityError(
+                    f"experiment stage {stage_name} binding is invalid"
+                )
+            binding = dict(raw_binding)
+            verified, detail = verify_compute_binding(self.workspace, binding)
+            if not verified:
+                raise ExperimentIntegrityError(
+                    f"experiment stage {stage_name} binding changed: {detail}"
+                )
+            raw_spec = binding.get("job_spec")
+            if not isinstance(raw_spec, Mapping):
+                raise ExperimentIntegrityError(
+                    f"experiment stage {stage_name} has no job specification"
+                )
+            spec = JobSpec.from_dict(raw_spec)
+            if binding.get("backend") != "local" or not spec.execute:
+                raise ExperimentIntegrityError(
+                    f"experiment stage {stage_name} must be an executable "
+                    "local sandbox job"
+                )
+            if tuple(spec.command) == full_command:
+                raise ExperimentIntegrityError(
+                    f"experiment stage {stage_name} must use a distinct command"
+                )
+            self._estimated_cost(spec)
+            if stage_name == "static_check" and (
+                spec.resources.gpus != 0
+                or (
+                    spec.resources.timeout_seconds is not None
+                    and spec.resources.timeout_seconds > 300
+                )
+            ):
+                raise ExperimentIntegrityError(
+                    "static_check is limited to zero GPUs and 300 seconds"
+                )
+            if stage_name == "mini_experiment" and (
+                spec.resources.gpus > 1
+                or (
+                    spec.resources.timeout_seconds is not None
+                    and spec.resources.timeout_seconds > 1800
+                )
+            ):
+                raise ExperimentIntegrityError(
+                    "mini_experiment is limited to one GPU and 1800 seconds"
+                )
+            normalized[stage_name] = binding
+        return normalized
+
     def propose(
         self,
         *,
@@ -337,6 +448,9 @@ class ExperimentManager:
         code_paths: Iterable[str | Path] | str | Path = (),
         config_paths: Iterable[str | Path] | str | Path = (),
         data_paths: Iterable[str | Path] | str | Path = (),
+        output_paths: Iterable[str | Path] | str | Path = (),
+        stage_job_specs: Mapping[str, Mapping[str, Any]] | None = None,
+        estimated_cost: float | None = None,
         cost_limit: float | None = None,
         risk_level: str | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -345,21 +459,113 @@ class ExperimentManager:
         normalized_title = str(title).strip()
         if not normalized_title:
             raise ValueError("experiment proposal title cannot be empty")
-        if cost_limit is not None and (
-            not math.isfinite(float(cost_limit)) or float(cost_limit) < 0
+        normalized_risk = str(risk_level).strip() if risk_level is not None else None
+        if contains_secret(
+            {"title": normalized_title, "risk_level": normalized_risk}
         ):
-            raise ValueError("experiment cost_limit must be finite and non-negative")
+            raise ValueError("experiment proposal must not contain credentials")
+        if cost_limit is not None and (
+            isinstance(cost_limit, bool)
+            or not math.isfinite(float(cost_limit))
+            or float(cost_limit) <= 0
+        ):
+            raise ValueError("experiment cost_limit must be finite and positive")
         normalized_command = _normalize_command(command)
         normalized_code = _normalize_paths(code_paths)
         normalized_config = _normalize_paths(config_paths)
         normalized_data = _normalize_paths(data_paths)
+        normalized_outputs = _normalize_paths(output_paths)
         normalized_metadata = _json_mapping(metadata)
+        if normalized_command:
+            compute_binding = normalized_metadata.get("compute_binding")
+            if isinstance(compute_binding, Mapping):
+                bound_spec = compute_binding.get("job_spec")
+                if not isinstance(bound_spec, Mapping):
+                    raise ExperimentIntegrityError(
+                        "compute binding is missing its job specification"
+                    )
+                canonical_spec = JobSpec.from_dict(bound_spec)
+                if tuple(canonical_spec.command) != normalized_command:
+                    raise ExperimentIntegrityError(
+                        "proposal command does not match its compute binding"
+                    )
+                bound_outputs = _normalize_paths(canonical_spec.outputs)
+                if normalized_outputs and normalized_outputs != bound_outputs:
+                    raise ExperimentIntegrityError(
+                        "proposal outputs do not match its compute binding"
+                    )
+                normalized_outputs = bound_outputs
+                normalized_metadata["execution_binding"] = dict(compute_binding)
+            else:
+                canonical_spec, execution_binding = build_compute_binding(
+                    self.workspace,
+                    job_spec={
+                        "name": "experiment-proposal",
+                        "command": list(normalized_command),
+                        "workdir": ".",
+                        "inputs": [
+                            *normalized_code,
+                            *normalized_config,
+                            *normalized_data,
+                        ],
+                        "outputs": list(normalized_outputs),
+                        "metadata": (
+                            {"estimated_cost": estimated_cost}
+                            if estimated_cost is not None
+                            else {}
+                        ),
+                        "execute": True,
+                    },
+                    compute_backend="local",
+                    compute_config={},
+                )
+                normalized_command = tuple(canonical_spec.command)
+                normalized_metadata["execution_binding"] = execution_binding
+        if stage_job_specs:
+            stage_bindings: dict[str, dict[str, Any]] = {}
+            for raw_stage, raw_spec in stage_job_specs.items():
+                stage = _normalize_stage(raw_stage)
+                if stage not in {
+                    ExperimentStage.STATIC_CHECK,
+                    ExperimentStage.MINI_EXPERIMENT,
+                }:
+                    raise ExperimentIntegrityError(
+                        "only static and mini stage job specs are accepted"
+                    )
+                stage_spec, stage_binding = build_compute_binding(
+                    self.workspace,
+                    job_spec=raw_spec,
+                    compute_backend="local",
+                    compute_config={},
+                )
+                if not stage_spec.execute:
+                    raise ExperimentIntegrityError(
+                        f"{stage.value} stage job must be executable"
+                    )
+                if tuple(stage_spec.command) == normalized_command:
+                    raise ExperimentIntegrityError(
+                        f"{stage.value} must use a distinct stage-limited command"
+                    )
+                stage_bindings[stage.value.lower()] = stage_binding
+            normalized_metadata["experiment_stage_bindings"] = stage_bindings
+        raw_stage_bindings = normalized_metadata.get(
+            "experiment_stage_bindings"
+        )
+        if isinstance(raw_stage_bindings, Mapping):
+            normalized_metadata["experiment_stage_bindings"] = (
+                self._validate_stage_bindings(
+                    raw_stage_bindings,
+                    full_command=normalized_command,
+                    require_complete=True,
+                )
+            )
         proposal_document = {
             "title": normalized_title,
             "command": list(normalized_command),
             "code_paths": list(normalized_code),
             "config_paths": list(normalized_config),
             "data_paths": list(normalized_data),
+            "output_paths": list(normalized_outputs),
             "metadata": normalized_metadata,
         }
         proposal_id = _stable_id(
@@ -392,7 +598,7 @@ class ExperimentManager:
                         sort_keys=True,
                     ),
                     float(cost_limit) if cost_limit is not None else None,
-                    str(risk_level) if risk_level is not None else None,
+                    normalized_risk,
                     created_at,
                 ),
             )
@@ -422,6 +628,7 @@ class ExperimentManager:
             code_paths=_normalize_paths(document.get("code_paths") or ()),
             config_paths=_normalize_paths(document.get("config_paths") or ()),
             data_paths=_normalize_paths(document.get("data_paths") or ()),
+            output_paths=_normalize_paths(document.get("output_paths") or ()),
             cost_limit=float(row["cost_limit"]) if row["cost_limit"] is not None else None,
             risk_level=str(row["risk_level"]) if row["risk_level"] is not None else None,
             created_at=str(row["created_at"]),
@@ -444,7 +651,37 @@ class ExperimentManager:
         normalized_approver = str(approved_by).strip()
         if not normalized_approver:
             raise ValueError("approved_by cannot be empty")
+        if contains_secret(normalized_approver):
+            raise ValueError("approved_by must not contain credentials")
         normalized_scope = _json_mapping(scope)
+        proposal = self.get_proposal(proposal_id)
+        execution_binding = proposal.metadata.get("execution_binding")
+        if isinstance(execution_binding, Mapping):
+            binding_sha256 = execution_binding.get("binding_sha256")
+            supplied = normalized_scope.get("experiment_binding_sha256")
+            if supplied is not None and supplied != binding_sha256:
+                raise ValueError(
+                    "approval scope cannot override experiment_binding_sha256"
+                )
+            normalized_scope["experiment_binding_sha256"] = binding_sha256
+        stage_bindings = proposal.metadata.get("experiment_stage_bindings")
+        if isinstance(stage_bindings, Mapping):
+            stage_hashes = {
+                str(stage): dict(binding).get("binding_sha256")
+                for stage, binding in stage_bindings.items()
+                if isinstance(binding, Mapping)
+            }
+            supplied_stage_hashes = normalized_scope.get(
+                "experiment_stage_binding_sha256"
+            )
+            if (
+                supplied_stage_hashes is not None
+                and supplied_stage_hashes != stage_hashes
+            ):
+                raise ValueError(
+                    "approval scope cannot override experiment stage bindings"
+                )
+            normalized_scope["experiment_stage_binding_sha256"] = stage_hashes
         approved_at = utc_now()
         approval_id = _stable_id(
             "approval",
@@ -453,6 +690,14 @@ class ExperimentManager:
             json.dumps(normalized_scope, ensure_ascii=False, sort_keys=True),
         )
         with self.memory.connect() as db:
+            db.execute(
+                """
+                UPDATE approvals
+                SET status = 'SUPERSEDED'
+                WHERE proposal_id = ? AND status = 'APPROVED'
+                """,
+                (proposal_id,),
+            )
             db.execute(
                 """
                 INSERT OR REPLACE INTO approvals
@@ -692,6 +937,7 @@ class ExperimentManager:
         started_at: str | None = None,
         ended_at: str | None = None,
         _verification: object | None = None,
+        _run_id: str | None = None,
     ) -> ExperimentRunRecord:
         normalized_stage = _normalize_stage(stage)
         normalized_status = ExperimentStatus(status)
@@ -737,7 +983,7 @@ class ExperimentManager:
             )
         )
         now = utc_now()
-        run_id = f"run_{uuid.uuid4().hex}"
+        run_id = _run_id or f"run_{uuid.uuid4().hex}"
         provenance_metadata = {
             **normalized_metadata,
             "provenance_kind": normalized_provenance.value,
@@ -759,6 +1005,15 @@ class ExperimentManager:
                  data_sha256, checkpoint_sha256, metrics_sha256, started_at,
                  ended_at, metadata_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    status=excluded.status,
+                    code_sha256=excluded.code_sha256,
+                    config_sha256=excluded.config_sha256,
+                    data_sha256=excluded.data_sha256,
+                    checkpoint_sha256=excluded.checkpoint_sha256,
+                    metrics_sha256=excluded.metrics_sha256,
+                    ended_at=excluded.ended_at,
+                    metadata_json=excluded.metadata_json
                 """,
                 (
                     run_id,
@@ -840,6 +1095,651 @@ class ExperimentManager:
             )
         raise TypeError("experiment executor returned an unsupported outcome")
 
+    def _execute_bound_local_stage(
+        self,
+        execution_binding: Mapping[str, Any],
+    ) -> ExecutionOutcome:
+        if execution_binding.get("backend") != "local":
+            raise ExperimentIntegrityError(
+                "automatic experiment stages require a local immutable binding"
+            )
+        raw_spec = execution_binding.get("job_spec")
+        execution_worktree = execution_binding.get("execution_worktree")
+        if not isinstance(raw_spec, Mapping) or not isinstance(
+            execution_worktree,
+            str,
+        ):
+            raise ExperimentIntegrityError(
+                "local experiment binding is missing its isolated worktree"
+            )
+        payload = dict(raw_spec)
+        payload["workdir"] = execution_worktree
+        payload["execute"] = True
+        spec = JobSpec.from_dict(payload)
+        backend = LocalBackend(
+            policy=self.policy,
+            state_dir=self.workspace / ".paperforge" / "compute",
+        )
+        result = backend.submit(spec)
+        timeout = spec.resources.timeout_seconds or 300
+        deadline = time.monotonic() + timeout
+        while result.status in {
+            JobStatus.SUBMITTED,
+            JobStatus.QUEUED,
+            JobStatus.RUNNING,
+        }:
+            if time.monotonic() >= deadline:
+                backend.cancel(result.job_id, execute=True)
+                raise TimeoutError("local experiment stage exceeded its time limit")
+            time.sleep(0.02)
+            result = backend.status(result.job_id, execute=True)
+        logs = backend.logs(result.job_id, execute=True)
+        if result.status is JobStatus.SUCCEEDED and spec.outputs:
+            backend.sync_artifacts(
+                result.job_id,
+                self.workspace,
+                direction=ArtifactDirection.DOWNLOAD,
+                patterns=tuple(str(path) for path in spec.outputs),
+                execute=True,
+            )
+        return ExecutionOutcome(
+            returncode=result.return_code or (
+                0 if result.status is JobStatus.SUCCEEDED else 1
+            ),
+            stdout=logs.stdout,
+            stderr=logs.stderr,
+            metadata={
+                "backend": "local",
+                "job_id": result.job_id,
+                "job_status": result.status.value,
+            },
+        )
+
+    @staticmethod
+    def _estimated_cost(spec: JobSpec) -> float:
+        raw = spec.metadata.get("estimated_cost")
+        if (
+            isinstance(raw, bool)
+            or not isinstance(raw, int | float)
+            or not math.isfinite(float(raw))
+            or float(raw) <= 0
+        ):
+            raise ExperimentIntegrityError(
+                "experiment stage requires a finite positive estimated_cost"
+            )
+        return float(raw)
+
+    def _reserve_budget(
+        self,
+        proposal: ExperimentProposal,
+        stage: ExperimentStage,
+        spec: JobSpec,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> tuple[str, float]:
+        if proposal.cost_limit is None or proposal.cost_limit <= 0:
+            raise ExperimentIntegrityError(
+                "experiment execution requires a positive cost_limit"
+            )
+        amount = self._estimated_cost(spec)
+        event_id = f"budget_{uuid.uuid4().hex}"
+        now = utc_now()
+        with self.memory.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            spent = float(
+                db.execute(
+                    """
+                    SELECT COALESCE(SUM(amount), 0)
+                    FROM experiment_budget_events
+                    WHERE experiment_id = ?
+                      AND status IN ('RESERVED', 'CHARGED', 'VIOLATION')
+                    """,
+                    (proposal.proposal_id,),
+                ).fetchone()[0]
+            )
+            if spent + amount > proposal.cost_limit:
+                raise ExperimentIntegrityError(
+                    "experiment stage would exceed the approved cost_limit"
+                )
+            db.execute(
+                """
+                INSERT INTO experiment_budget_events
+                (id, experiment_id, stage, amount, status, created_at,
+                 updated_at, metadata_json)
+                VALUES (?, ?, ?, ?, 'RESERVED', ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    proposal.proposal_id,
+                    stage.value,
+                    amount,
+                    now,
+                    now,
+                    json.dumps(
+                        _json_mapping(metadata),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                ),
+            )
+        return event_id, amount
+
+    def _settle_budget(
+        self,
+        event_id: str,
+        *,
+        status: str,
+        amount: float,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        normalized_status = str(status).strip().upper()
+        if normalized_status not in {"CHARGED", "RELEASED", "VIOLATION"}:
+            raise ValueError("unsupported experiment budget status")
+        with self.memory.connect() as db:
+            db.execute(
+                """
+                UPDATE experiment_budget_events
+                SET status = ?, amount = ?, updated_at = ?, metadata_json = ?
+                WHERE id = ?
+                """,
+                (
+                    normalized_status,
+                    amount,
+                    utc_now(),
+                    json.dumps(
+                        _json_mapping(metadata),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    event_id,
+                ),
+            )
+
+    def _authorized_stage_binding(
+        self,
+        proposal_id: str,
+        stage: ExperimentStage,
+        *,
+        command: Sequence[str] | None = None,
+    ) -> tuple[
+        ExperimentProposal,
+        Mapping[str, Any],
+        JobSpec,
+        tuple[str, ...],
+    ]:
+        proposal = self.get_proposal(proposal_id)
+        stage_key = stage.value.lower()
+        stage_bindings = proposal.metadata.get("experiment_stage_bindings")
+        selected_binding = (
+            dict(stage_bindings[stage_key])
+            if stage is not ExperimentStage.FULL_EXPERIMENT
+            and isinstance(stage_bindings, Mapping)
+            and isinstance(stage_bindings.get(stage_key), Mapping)
+            else proposal.metadata.get("execution_binding")
+            if stage is ExperimentStage.FULL_EXPERIMENT
+            else None
+        )
+        if not isinstance(selected_binding, Mapping):
+            raise ExperimentIntegrityError(
+                f"experiment stage {stage.value} requires its own "
+                "immutable job binding"
+            )
+        selected_spec_payload = selected_binding.get("job_spec")
+        if not isinstance(selected_spec_payload, Mapping):
+            raise ExperimentIntegrityError(
+                "experiment stage binding is missing its job specification"
+            )
+        selected_spec = JobSpec.from_dict(selected_spec_payload)
+        if stage is not ExperimentStage.FULL_EXPERIMENT:
+            self._validate_stage_bindings(
+                {stage_key: selected_binding},
+                full_command=proposal.command,
+                require_complete=False,
+            )
+        normalized_command = (
+            _normalize_command(command)
+            if command is not None
+            else tuple(selected_spec.command)
+        )
+        if not normalized_command:
+            raise ValueError(
+                "experiment execution requires an argument-vector command"
+            )
+        if tuple(normalized_command) != tuple(selected_spec.command):
+            raise ExperimentIntegrityError(
+                "experiment execution command does not match the approved stage"
+            )
+        approval = self._require_approval(proposal_id, stage)
+        approval_scope = _json_mapping(approval.get("scope"))
+        expected_binding_sha256 = selected_binding.get("binding_sha256")
+        approved_binding_sha256 = (
+            approval_scope.get("experiment_binding_sha256")
+            if stage is ExperimentStage.FULL_EXPERIMENT
+            else dict(
+                approval_scope.get("experiment_stage_binding_sha256") or {}
+            ).get(stage_key)
+        )
+        if approved_binding_sha256 != expected_binding_sha256:
+            raise ExperimentIntegrityError(
+                "experiment approval is not bound to the proposal inputs"
+            )
+        verified, detail = verify_compute_binding(
+            self.workspace,
+            selected_binding,
+        )
+        if not verified:
+            raise ExperimentIntegrityError(
+                f"experiment proposal binding changed: {detail}"
+            )
+        self._authorize_stage(proposal_id, stage)
+        self.policy.validate_command(
+            normalized_command,
+            _STAGE_ACTIONS[stage],
+        )
+        return (
+            proposal,
+            selected_binding,
+            selected_spec,
+            normalized_command,
+        )
+
+    def reserve_backend_stage(
+        self,
+        proposal_id: str,
+        stage: ExperimentStage | str,
+        *,
+        lifecycle_id: str,
+    ) -> tuple[str, float]:
+        normalized_stage = _normalize_stage(stage)
+        lifecycle = str(lifecycle_id).strip()
+        if not lifecycle or contains_secret(lifecycle):
+            raise ExperimentIntegrityError(
+                "backend lifecycle_id must be non-secret and non-empty"
+            )
+        proposal, binding, spec, _ = self._authorized_stage_binding(
+            proposal_id,
+            normalized_stage,
+        )
+        with self.memory.connect() as db:
+            rows = db.execute(
+                """
+                SELECT id, amount, status, metadata_json
+                FROM experiment_budget_events
+                WHERE experiment_id = ? AND stage = ?
+                ORDER BY created_at, id
+                """,
+                (proposal_id, normalized_stage.value),
+            ).fetchall()
+        original_output_hashes: Mapping[str, Any] | None = None
+        for row in rows:
+            metadata = json.loads(row["metadata_json"])
+            if metadata.get("lifecycle_id") != lifecycle:
+                continue
+            if original_output_hashes is None and isinstance(
+                metadata.get("output_hashes_before"),
+                Mapping,
+            ):
+                original_output_hashes = dict(
+                    metadata["output_hashes_before"]
+                )
+            if row["status"] in {"RESERVED", "CHARGED"}:
+                return str(row["id"]), float(row["amount"])
+        return self._reserve_budget(
+            proposal,
+            normalized_stage,
+            spec,
+            metadata={
+                "lifecycle_id": lifecycle,
+                "binding_sha256": binding.get("binding_sha256"),
+                "job_id": spec.job_id,
+                "output_hashes_before": (
+                    dict(original_output_hashes)
+                    if original_output_hashes is not None
+                    else self._output_hashes(
+                        _normalize_paths(spec.outputs)
+                    )
+                ),
+            },
+        )
+
+    def finalize_backend_stage(
+        self,
+        proposal_id: str,
+        stage: ExperimentStage | str,
+        *,
+        lifecycle_id: str,
+        budget_event_id: str,
+        returncode: int,
+        stdout: str = "",
+        stderr: str = "",
+        actual_cost: float | None = None,
+        checkpoint_paths: Iterable[str | Path] | str | Path = (),
+        metrics_paths: Iterable[str | Path] | str | Path = (),
+        metadata: Mapping[str, Any] | None = None,
+    ) -> ExperimentRunRecord:
+        normalized_stage = _normalize_stage(stage)
+        stable_run_id = _stable_id(
+            "run",
+            proposal_id,
+            normalized_stage.value,
+            lifecycle_id,
+            budget_event_id,
+        )
+        try:
+            existing_run = self.get_run(stable_run_id)
+        except KeyError:
+            existing_run = None
+        if existing_run is not None:
+            if (
+                existing_run.proposal_id != proposal_id
+                or existing_run.stage is not normalized_stage
+                or existing_run.metadata.get("backend_lifecycle_id")
+                != lifecycle_id
+                or existing_run.metadata.get("budget_event_id")
+                != budget_event_id
+            ):
+                raise ExperimentIntegrityError(
+                    "backend run idempotency record does not match execution"
+                )
+            return existing_run
+        proposal, binding, spec, normalized_command = (
+            self._authorized_stage_binding(
+                proposal_id,
+                normalized_stage,
+            )
+        )
+        with self.memory.connect() as db:
+            row = db.execute(
+                """
+                SELECT * FROM experiment_budget_events
+                WHERE id = ? AND experiment_id = ? AND stage = ?
+                """,
+                (
+                    budget_event_id,
+                    proposal_id,
+                    normalized_stage.value,
+                ),
+            ).fetchone()
+        if row is None:
+            raise ExperimentIntegrityError(
+                "backend stage budget reservation was not found"
+            )
+        budget_metadata = json.loads(row["metadata_json"])
+        if (
+            budget_metadata.get("lifecycle_id") != lifecycle_id
+            or budget_metadata.get("binding_sha256")
+            != binding.get("binding_sha256")
+            or budget_metadata.get("job_id") != spec.job_id
+            or row["status"] not in {"RESERVED", "CHARGED"}
+        ):
+            raise ExperimentIntegrityError(
+                "backend stage reservation does not match execution"
+            )
+        estimated_cost = float(
+            budget_metadata.get("estimated_cost", row["amount"])
+        )
+        charged_cost = (
+            float(row["amount"])
+            if row["status"] == "CHARGED" and actual_cost is None
+            else estimated_cost
+            if actual_cost is None
+            else float(actual_cost)
+        )
+        if (
+            not math.isfinite(charged_cost)
+            or charged_cost < 0
+            or charged_cost > estimated_cost
+        ):
+            self._settle_budget(
+                budget_event_id,
+                status="VIOLATION",
+                amount=estimated_cost,
+                metadata={"reason": "actual_cost_exceeded_reservation"},
+            )
+            raise ExperimentIntegrityError(
+                "experiment actual_cost exceeded its reserved budget"
+            )
+        if row["status"] == "CHARGED" and charged_cost != float(row["amount"]):
+            raise ExperimentIntegrityError(
+                "backend stage actual_cost changed after it was charged"
+            )
+        normalized_checkpoints = _normalize_paths(checkpoint_paths)
+        normalized_metrics = _normalize_paths(metrics_paths)
+        if (
+            normalized_stage is ExperimentStage.FULL_EXPERIMENT
+            and returncode == 0
+            and not normalized_metrics
+        ):
+            raise ExperimentIntegrityError(
+                "successful full experiments require declared metrics evidence"
+            )
+        declared_outputs = set(_normalize_paths(spec.outputs))
+        evidence_outputs = {
+            *normalized_checkpoints,
+            *normalized_metrics,
+        }
+        if not evidence_outputs.issubset(declared_outputs):
+            raise ExperimentIntegrityError(
+                "backend evidence paths must be declared job outputs"
+            )
+        before = {
+            str(key): value
+            for key, value in dict(
+                budget_metadata.get("output_hashes_before") or {}
+            ).items()
+        }
+        after = self._output_hashes(_normalize_paths(spec.outputs))
+        fresh_outputs = sorted(
+            path
+            for path, digest in after.items()
+            if digest is not None and digest != before.get(path)
+        )
+        evidence_verified = evidence_outputs.issubset(fresh_outputs)
+        execution_verified = (
+            returncode == 0
+            and (
+                normalized_stage is not ExperimentStage.FULL_EXPERIMENT
+                or (
+                    bool(normalized_metrics)
+                    and evidence_verified
+                )
+            )
+        )
+        if row["status"] == "RESERVED":
+            self._settle_budget(
+                budget_event_id,
+                status="CHARGED",
+                amount=charged_cost,
+                metadata={
+                    **budget_metadata,
+                    "estimated_cost": estimated_cost,
+                },
+            )
+        normalized_metadata = {
+            **_json_mapping(metadata),
+            "backend_lifecycle_id": lifecycle_id,
+            "binding_sha256": binding.get("binding_sha256"),
+            "command": list(normalized_command),
+            "returncode": returncode,
+            "stdout_sha256": hashlib.sha256(
+                stdout.encode("utf-8")
+            ).hexdigest(),
+            "stderr_sha256": hashlib.sha256(
+                stderr.encode("utf-8")
+            ).hexdigest(),
+            "execution_verified": execution_verified,
+            "fresh_outputs": fresh_outputs,
+            "evidence_outputs_verified": evidence_verified,
+            "budget_event_id": budget_event_id,
+            "estimated_cost": estimated_cost,
+            "actual_cost": charged_cost,
+        }
+        return self.record_stage(
+            proposal_id,
+            normalized_stage,
+            status=(
+                ExperimentStatus.PASSED
+                if returncode == 0
+                else ExperimentStatus.FAILED
+            ),
+            provenance_kind=ProvenanceKind.MEASURED,
+            checkpoint_paths=(
+                normalized_checkpoints if returncode == 0 else ()
+            ),
+            metrics_paths=normalized_metrics if returncode == 0 else (),
+            metadata=normalized_metadata,
+            started_at=str(row["created_at"]),
+            ended_at=utc_now(),
+            _verification=(
+                _EXECUTION_VERIFIED if execution_verified else None
+            ),
+            _run_id=stable_run_id,
+        )
+
+    def charge_backend_stage(
+        self,
+        proposal_id: str,
+        stage: ExperimentStage | str,
+        *,
+        lifecycle_id: str,
+        budget_event_id: str,
+        actual_cost: float | None = None,
+    ) -> float:
+        """Durably charge a terminal backend execution before artifact handling."""
+
+        normalized_stage = _normalize_stage(stage)
+        with self.memory.connect() as db:
+            existing_row = db.execute(
+                """
+                SELECT * FROM experiment_budget_events
+                WHERE id = ? AND experiment_id = ? AND stage = ?
+                """,
+                (
+                    budget_event_id,
+                    proposal_id,
+                    normalized_stage.value,
+                ),
+            ).fetchone()
+        if existing_row is None:
+            raise ExperimentIntegrityError(
+                "backend stage budget reservation was not found"
+            )
+        existing_metadata = json.loads(existing_row["metadata_json"])
+        if existing_metadata.get("lifecycle_id") != lifecycle_id:
+            raise ExperimentIntegrityError(
+                "backend stage reservation does not match execution"
+            )
+        if existing_row["status"] == "CHARGED":
+            charged_cost = float(existing_row["amount"])
+            if actual_cost is not None and float(actual_cost) != charged_cost:
+                raise ExperimentIntegrityError(
+                    "backend stage actual_cost changed after it was charged"
+                )
+            return charged_cost
+        _, binding, spec, _ = self._authorized_stage_binding(
+            proposal_id,
+            normalized_stage,
+        )
+        with self.memory.connect() as db:
+            row = db.execute(
+                """
+                SELECT * FROM experiment_budget_events
+                WHERE id = ? AND experiment_id = ? AND stage = ?
+                """,
+                (
+                    budget_event_id,
+                    proposal_id,
+                    normalized_stage.value,
+                ),
+            ).fetchone()
+        if row is None:
+            raise ExperimentIntegrityError(
+                "backend stage budget reservation was not found"
+            )
+        metadata = json.loads(row["metadata_json"])
+        if (
+            metadata.get("lifecycle_id") != lifecycle_id
+            or metadata.get("binding_sha256") != binding.get("binding_sha256")
+            or metadata.get("job_id") != spec.job_id
+        ):
+            raise ExperimentIntegrityError(
+                "backend stage reservation does not match execution"
+            )
+        estimated_cost = float(metadata.get("estimated_cost", row["amount"]))
+        charged_cost = estimated_cost if actual_cost is None else float(actual_cost)
+        if (
+            not math.isfinite(charged_cost)
+            or charged_cost < 0
+            or charged_cost > estimated_cost
+        ):
+            if row["status"] == "RESERVED":
+                self._settle_budget(
+                    budget_event_id,
+                    status="VIOLATION",
+                    amount=estimated_cost,
+                    metadata={
+                        **metadata,
+                        "estimated_cost": estimated_cost,
+                        "reason": "actual_cost_exceeded_reservation",
+                    },
+                )
+            raise ExperimentIntegrityError(
+                "experiment actual_cost exceeded its reserved budget"
+            )
+        if row["status"] != "RESERVED":
+            raise ExperimentIntegrityError(
+                "backend stage reservation cannot be charged from its current state"
+            )
+        self._settle_budget(
+            budget_event_id,
+            status="CHARGED",
+            amount=charged_cost,
+            metadata={
+                **metadata,
+                "estimated_cost": estimated_cost,
+                "execution_terminal": True,
+                "execution_charged_at": utc_now(),
+            },
+        )
+        return charged_cost
+
+    def release_backend_stage(
+        self,
+        proposal_id: str,
+        *,
+        lifecycle_id: str,
+        budget_event_id: str,
+        reason: str,
+    ) -> None:
+        with self.memory.connect() as db:
+            row = db.execute(
+                """
+                SELECT amount, status, metadata_json
+                FROM experiment_budget_events
+                WHERE id = ? AND experiment_id = ?
+                """,
+                (budget_event_id, proposal_id),
+            ).fetchone()
+        if row is None:
+            raise ExperimentIntegrityError(
+                "backend stage budget reservation was not found"
+            )
+        metadata = json.loads(row["metadata_json"])
+        if metadata.get("lifecycle_id") != lifecycle_id:
+            raise ExperimentIntegrityError(
+                "backend stage reservation does not match execution"
+            )
+        if row["status"] == "RESERVED":
+            self._settle_budget(
+                budget_event_id,
+                status="RELEASED",
+                amount=float(row["amount"]),
+                metadata={
+                    **metadata,
+                    "reason": str(reason).strip() or "backend_stage_released",
+                },
+            )
+
     def execute_stage(
         self,
         proposal_id: str,
@@ -856,24 +1756,89 @@ class ExperimentManager:
         metadata: Mapping[str, Any] | None = None,
     ) -> ExperimentRunRecord:
         normalized_stage = _normalize_stage(stage)
-        proposal = self.get_proposal(proposal_id)
-        normalized_command = _normalize_command(command) if command is not None else proposal.command
-        if not normalized_command:
-            raise ValueError("experiment execution requires an argument-vector command")
-        # Authorization and transition checks happen before invoking any code.
-        self._authorize_stage(proposal_id, normalized_stage)
-        self.policy.validate_command(
+        (
+            proposal,
+            selected_binding,
+            selected_spec,
             normalized_command,
-            _STAGE_ACTIONS[normalized_stage],
+        ) = self._authorized_stage_binding(
+            proposal_id,
+            normalized_stage,
+            command=command,
+        )
+        selected_outputs = _normalize_paths(selected_spec.outputs)
+        output_hashes_before = self._output_hashes(selected_outputs)
+        budget_event_id, estimated_cost = self._reserve_budget(
+            proposal,
+            normalized_stage,
+            selected_spec,
         )
         started_at = utc_now()
-        outcome = self._normalize_outcome(
-            (executor or self._default_executor)(
-                normalized_command,
-                self.workspace,
-                normalized_stage,
+        try:
+            if executor is None:
+                outcome = self._execute_bound_local_stage(selected_binding)
+                execution_verified = True
+            else:
+                outcome = self._normalize_outcome(
+                    executor(
+                        normalized_command,
+                        self.workspace,
+                        normalized_stage,
+                    )
+                )
+                execution_verified = False
+        except Exception:
+            self._settle_budget(
+                budget_event_id,
+                status="RELEASED",
+                amount=estimated_cost,
+                metadata={"reason": "execution_failed_before_result"},
             )
+            raise
+        raw_actual_cost = outcome.metadata.get(
+            "actual_cost",
+            estimated_cost,
         )
+        if (
+            isinstance(raw_actual_cost, bool)
+            or not isinstance(raw_actual_cost, int | float)
+            or not math.isfinite(float(raw_actual_cost))
+            or float(raw_actual_cost) < 0
+            or float(raw_actual_cost) > estimated_cost
+        ):
+            self._settle_budget(
+                budget_event_id,
+                status="VIOLATION",
+                amount=estimated_cost,
+                metadata={"reason": "actual_cost_exceeded_reservation"},
+            )
+            raise ExperimentIntegrityError(
+                "experiment actual_cost exceeded its reserved budget"
+            )
+        actual_cost = float(raw_actual_cost)
+        self._settle_budget(
+            budget_event_id,
+            status="CHARGED",
+            amount=actual_cost,
+            metadata={"estimated_cost": estimated_cost},
+        )
+        effective_checkpoints = (
+            _normalize_paths(checkpoint_paths) or outcome.checkpoint_paths
+        )
+        effective_metrics = _normalize_paths(metrics_paths) or outcome.metrics_paths
+        if outcome.returncode != 0:
+            effective_checkpoints = ()
+            effective_metrics = ()
+        output_hashes_after = self._output_hashes(selected_outputs)
+        fresh_outputs = sorted(
+            path
+            for path, after in output_hashes_after.items()
+            if after is not None and after != output_hashes_before.get(path)
+        )
+        evidence_outputs = {*effective_checkpoints, *effective_metrics}
+        evidence_outputs_verified = evidence_outputs.issubset(fresh_outputs)
+        if normalized_stage is ExperimentStage.FULL_EXPERIMENT:
+            execution_verified = execution_verified and evidence_outputs_verified
         normalized_metadata = {
             **_json_mapping(metadata),
             **_json_mapping(outcome.metadata),
@@ -885,7 +1850,12 @@ class ExperimentManager:
             "stderr_sha256": hashlib.sha256(
                 outcome.stderr.encode("utf-8")
             ).hexdigest(),
-            "execution_verified": True,
+            "execution_verified": execution_verified,
+            "fresh_outputs": fresh_outputs,
+            "evidence_outputs_verified": evidence_outputs_verified,
+            "budget_event_id": budget_event_id,
+            "estimated_cost": estimated_cost,
+            "actual_cost": actual_cost,
         }
         return self.record_stage(
             proposal_id,
@@ -899,14 +1869,14 @@ class ExperimentManager:
             code_paths=code_paths,
             config_paths=config_paths,
             data_paths=data_paths,
-            checkpoint_paths=(
-                _normalize_paths(checkpoint_paths) or outcome.checkpoint_paths
-            ),
-            metrics_paths=_normalize_paths(metrics_paths) or outcome.metrics_paths,
+            checkpoint_paths=effective_checkpoints,
+            metrics_paths=effective_metrics,
             metadata=normalized_metadata,
             started_at=started_at,
             ended_at=utc_now(),
-            _verification=_EXECUTION_VERIFIED,
+            _verification=(
+                _EXECUTION_VERIFIED if execution_verified else None
+            ),
         )
 
     execute = execute_stage

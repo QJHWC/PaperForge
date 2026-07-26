@@ -12,6 +12,8 @@ from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from engine.secret_redaction import contains_secret, redact_structure
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -95,6 +97,8 @@ def _normalize_command(command: Sequence[str] | str) -> tuple[str, ...]:
         raise ValueError("command must contain at least one argument")
     if any(not part or "\x00" in part for part in normalized):
         raise ValueError("command arguments must be non-empty and contain no NUL bytes")
+    if contains_secret({"command": normalized}):
+        raise ValueError("command must not contain credentials")
     return normalized
 
 
@@ -148,6 +152,8 @@ class JobSpec:
                 raise ValueError(f"invalid environment variable name: {key!r}")
             if not isinstance(value, str) or "\x00" in value:
                 raise ValueError(f"environment value for {key!r} must be a safe string")
+        if contains_secret(env):
+            raise ValueError("compute environment must not contain credentials")
 
         inputs = tuple(os.fspath(path) for path in self.inputs)
         if any(not path or "\x00" in path for path in inputs):
@@ -162,6 +168,12 @@ class JobSpec:
             raise ValueError("job_id contains unsafe characters")
         if not isinstance(self.execute, bool):
             raise TypeError("execute must be a boolean")
+        backend_options = dict(self.backend_options)
+        metadata = dict(self.metadata)
+        if contains_secret(backend_options):
+            raise ValueError("backend_options must not contain credentials")
+        if contains_secret(metadata):
+            raise ValueError("metadata must not contain credentials")
 
         object.__setattr__(self, "command", command)
         object.__setattr__(self, "workdir", workdir)
@@ -169,14 +181,22 @@ class JobSpec:
         object.__setattr__(self, "inputs", inputs)
         object.__setattr__(self, "outputs", outputs)
         object.__setattr__(self, "resources", resources)
-        object.__setattr__(self, "backend_options", dict(self.backend_options))
-        object.__setattr__(self, "metadata", dict(self.metadata))
+        object.__setattr__(self, "backend_options", backend_options)
+        object.__setattr__(self, "metadata", metadata)
 
     @property
     def fingerprint(self) -> str:
-        payload = self.to_dict()
-        payload.pop("execute", None)
-        payload.pop("job_id", None)
+        payload = {
+            "name": self.name,
+            "command": list(self.command),
+            "workdir": os.fspath(self.workdir),
+            "env": dict(self.env),
+            "inputs": list(self.inputs),
+            "outputs": list(self.outputs),
+            "resources": self.resources.to_dict(),
+            "backend_options": redact_structure(dict(self.backend_options)),
+            "metadata": redact_structure(dict(self.metadata)),
+        }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -255,10 +275,17 @@ class ArtifactRecord:
     path: str
     size_bytes: int
     sha256: str | None = None
+    attempt_id: int | None = None
 
     def __post_init__(self) -> None:
         if self.size_bytes < 0:
             raise ValueError("size_bytes cannot be negative")
+        if self.attempt_id is not None and (
+            isinstance(self.attempt_id, bool)
+            or not isinstance(self.attempt_id, int)
+            or self.attempt_id < 1
+        ):
+            raise ValueError("attempt_id must be a positive integer")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -271,6 +298,11 @@ class ArtifactRecord:
             sha256=(
                 str(payload["sha256"])
                 if payload.get("sha256") is not None
+                else None
+            ),
+            attempt_id=(
+                int(payload["attempt_id"])
+                if payload.get("attempt_id") is not None
                 else None
             ),
         )

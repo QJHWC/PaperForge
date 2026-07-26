@@ -6,7 +6,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from engine.secret_redaction import redact_secrets, redact_structure
+
 from .models import CompletionGate, ExecutionProfile, WorkflowStatus, utc_now
+from .path_safety import safe_mkdir
 from .scientific_memory import ScientificMemory, _stable_id
 
 
@@ -65,8 +68,11 @@ class WorkflowEngine:
     def __init__(self, workspace: str | Path) -> None:
         self.workspace = Path(workspace).expanduser().resolve()
         self.state_dir = self.workspace / ".paperforge"
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        self.memory = ScientificMemory(self.state_dir / "paperforge.db")
+        safe_mkdir(self.state_dir, anchor=self.workspace)
+        self.memory = ScientificMemory(
+            self.state_dir / "paperforge.db",
+            trusted_root=self.workspace,
+        )
 
     def create(
         self,
@@ -82,6 +88,7 @@ class WorkflowEngine:
             else f"wf_{uuid.uuid4().hex[:24]}"
         )
         now = utc_now()
+        safe_metadata = redact_structure(dict(metadata or {}))
         with self.memory.connect() as db:
             db.execute(
                 """
@@ -99,7 +106,7 @@ class WorkflowEngine:
                     "created",
                     now,
                     now,
-                    json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True),
+                    json.dumps(safe_metadata, ensure_ascii=False, sort_keys=True),
                 ),
             )
         return workflow_id
@@ -137,6 +144,10 @@ class WorkflowEngine:
         if target is WorkflowStatus.COMPLETED and (gate is None or not gate.passed):
             raise InvalidTransition("COMPLETED requires every release gate to pass")
         now = utc_now()
+        safe_detail = redact_secrets(detail)
+        safe_error_code = (
+            redact_secrets(error_code) if error_code is not None else None
+        )
         with self.memory.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
@@ -162,7 +173,7 @@ class WorkflowEngine:
                     target.value,
                     checkpoint,
                     now,
-                    error_code,
+                    safe_error_code,
                     workflow_id,
                     int(row["version"]),
                 ),
@@ -179,7 +190,7 @@ class WorkflowEngine:
                     workflow_id,
                     checkpoint or "workflow",
                     target.value,
-                    detail,
+                    safe_detail,
                     idempotency_key,
                     now,
                 ),
@@ -193,23 +204,17 @@ class WorkflowEngine:
         approved_by: str,
         scope: Mapping[str, Any] | None = None,
     ) -> str:
-        approval_id = _stable_id("approval", proposal_id, approved_by, json.dumps(scope or {}, sort_keys=True))
-        with self.memory.connect() as db:
-            db.execute(
-                """
-                INSERT OR REPLACE INTO approvals
-                (id, proposal_id, status, approved_by, approved_at, scope_json)
-                VALUES (?, ?, 'APPROVED', ?, ?, ?)
-                """,
-                (
-                    approval_id,
-                    proposal_id,
-                    approved_by,
-                    utc_now(),
-                    json.dumps(scope or {}, ensure_ascii=False, sort_keys=True),
-                ),
-            )
-        return approval_id
+        from .experiments import ExperimentManager
+
+        return ExperimentManager(
+            self.workspace,
+            profile=ExecutionProfile.FULL,
+            memory=self.memory,
+        ).approve(
+            proposal_id,
+            approved_by=approved_by,
+            scope=scope,
+        )
 
     def record_checkpoint(
         self,
@@ -221,6 +226,7 @@ class WorkflowEngine:
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         now = utc_now()
+        safe_detail = redact_secrets(detail)
         with self.memory.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
@@ -230,7 +236,7 @@ class WorkflowEngine:
             if row is None:
                 raise KeyError(workflow_id)
             metadata = json.loads(row["metadata_json"])
-            metadata.update(dict(metadata_updates or {}))
+            metadata.update(redact_structure(dict(metadata_updates or {})))
             updated = db.execute(
                 """
                 UPDATE workflows
@@ -258,7 +264,7 @@ class WorkflowEngine:
                 """,
                 (
                     checkpoint,
-                    detail,
+                    safe_detail,
                     idempotency_key,
                     now,
                     workflow_id,
@@ -266,8 +272,76 @@ class WorkflowEngine:
             )
         return self.get(workflow_id)
 
+    def claim_runtime_execution(self, workflow_id: str) -> bool:
+        """Atomically reserve one runtime execution for a workflow."""
+
+        now = utc_now()
+        with self.memory.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT version, metadata_json FROM workflows WHERE id = ?",
+                (workflow_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(workflow_id)
+            metadata = json.loads(row["metadata_json"])
+            if metadata.get("runtime_executed") or metadata.get("runtime_claimed"):
+                return False
+            metadata["runtime_claimed"] = True
+            metadata["runtime_claimed_at"] = now
+            updated = db.execute(
+                """
+                UPDATE workflows
+                SET updated_at = ?, version = version + 1, metadata_json = ?
+                WHERE id = ? AND version = ?
+                """,
+                (
+                    now,
+                    json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+                    workflow_id,
+                    int(row["version"]),
+                ),
+            )
+            if updated.rowcount != 1:
+                raise InvalidTransition(
+                    "workflow changed concurrently; runtime was not claimed"
+                )
+        return True
+
+    def release_runtime_claim(self, workflow_id: str) -> None:
+        with self.memory.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT metadata_json FROM workflows WHERE id = ?",
+                (workflow_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(workflow_id)
+            metadata = json.loads(row["metadata_json"])
+            metadata["runtime_claimed"] = False
+            db.execute(
+                """
+                UPDATE workflows
+                SET updated_at = ?, version = version + 1, metadata_json = ?
+                WHERE id = ?
+                """,
+                (
+                    utc_now(),
+                    json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+                    workflow_id,
+                ),
+            )
+
     def require_approval(self, proposal_id: str) -> dict[str, Any]:
         with self.memory.connect() as db:
+            proposal = db.execute(
+                "SELECT id FROM experiments WHERE id = ?",
+                (proposal_id,),
+            ).fetchone()
+            if proposal is None:
+                raise PermissionError(
+                    f"proposal is not approved: {proposal_id}"
+                )
             row = db.execute(
                 """
                 SELECT * FROM approvals

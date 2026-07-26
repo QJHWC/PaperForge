@@ -4,6 +4,13 @@ import json
 import sqlite3
 from pathlib import Path
 
+from engine.secret_redaction import redact_structure
+from paperforge.path_safety import (
+    reject_symlink_components,
+    safe_mkdir,
+    validate_writable_path,
+)
+
 from .contracts import JobResult, JobSpec, utc_now
 
 
@@ -11,11 +18,18 @@ class ComputeStateStore:
     """Durable, secret-redacted compute state shared by all backends."""
 
     def __init__(self, state_dir: str | Path) -> None:
-        self.state_dir = Path(state_dir).expanduser().resolve()
+        self.state_dir = validate_writable_path(state_dir)
         self.path = self.state_dir / "compute-state.sqlite3"
 
     def _connect(self) -> sqlite3.Connection:
-        self.state_dir.mkdir(parents=True, exist_ok=True)
+        safe_mkdir(self.state_dir)
+        reject_symlink_components(self.path, anchor=self.state_dir)
+        if self.path.is_symlink() or (
+            self.path.exists() and not self.path.is_file()
+        ):
+            raise ValueError(
+                "compute state database must be a regular file"
+            )
         connection = sqlite3.connect(self.path, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA journal_mode = WAL")
@@ -35,6 +49,8 @@ class ComputeStateStore:
         return connection
 
     def save(self, backend: str, job_id: str, spec: JobSpec, result: JobResult) -> None:
+        safe_spec = redact_structure(spec.to_dict())
+        safe_result = redact_structure(result.to_dict())
         with self._connect() as db:
             db.execute(
                 """
@@ -49,8 +65,8 @@ class ComputeStateStore:
                 (
                     backend,
                     job_id,
-                    json.dumps(spec.to_dict(), ensure_ascii=False, sort_keys=True),
-                    json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True),
+                    json.dumps(safe_spec, ensure_ascii=False, sort_keys=True),
+                    json.dumps(safe_result, ensure_ascii=False, sort_keys=True),
                     utc_now(),
                 ),
             )
@@ -70,4 +86,3 @@ class ComputeStateStore:
                 (backend, job_id),
             ).fetchone()
         return JobResult.from_dict(json.loads(row["result_json"])) if row else None
-

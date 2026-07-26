@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from paperforge.experiments import ExperimentManager
 from paperforge.models import (
     ClaimRelation,
     ClaimStatus,
@@ -13,12 +14,15 @@ from paperforge.models import (
     ExecutionProfile,
     WorkflowStatus,
 )
+from paperforge.path_safety import UnsafePathError
 from paperforge.policy import Action, ExecutionPolicy, PolicyViolation
 from paperforge.provider import (
     CredentialResolver,
+    ProviderAuthenticationError,
     ProviderConfigurationError,
     ProviderRegistry,
     ProviderRequestBuilder,
+    chat_completion_text,
     preflight_openai_compatible,
 )
 from paperforge.scientific_memory import ScientificMemory
@@ -163,6 +167,104 @@ def test_provider_preflight_classifies_auth_failure() -> None:
     assert not report.response_received
 
 
+def test_provider_text_request_uses_shared_filtered_payload(
+    tmp_path: Path,
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    class Completions:
+        @staticmethod
+        def create(**kwargs):
+            captured.append(dict(kwargs))
+            content = "OK" if len(captured) == 1 else "draft"
+            message = type("Message", (), {"content": content})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Response", (), {"choices": [choice]})()
+
+    client = type(
+        "Client",
+        (),
+        {"chat": type("Chat", (), {"completions": Completions()})()},
+    )()
+    registry = ProviderRegistry(
+        env={
+            "PAPERFORGE_CREDENTIAL_BAILU_PRIMARY": "fixture",
+            "XDG_CONFIG_HOME": str(tmp_path),
+        }
+    )
+
+    content = chat_completion_text(
+        "bailu-turing",
+        messages=[{"role": "user", "content": "write"}],
+        registry=registry,
+        client=client,
+        reasoning_effort="high",
+        seed=7,
+        n=2,
+        stop=["done"],
+    )
+
+    assert content == "draft"
+    assert len(captured) == 2
+    assert captured[0]["max_tokens"] == 16
+    assert captured[1]["model"] == "bailu-turing"
+    assert captured[1]["stream"] is False
+    assert not {"reasoning_effort", "seed", "n", "stop"} & captured[1].keys()
+
+
+def test_provider_auth_preflight_is_cached_and_blocks_long_request(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    class Unauthorized(Exception):
+        status_code = 401
+
+    class Completions:
+        @staticmethod
+        def create(**_kwargs):
+            nonlocal calls
+            calls += 1
+            raise Unauthorized("invalid key")
+
+    client = type(
+        "Client",
+        (),
+        {"chat": type("Chat", (), {"completions": Completions()})()},
+    )()
+    registry = ProviderRegistry(
+        env={
+            "PAPERFORGE_CREDENTIAL_BAILU_PRIMARY": "invalid-fixture",
+            "XDG_CONFIG_HOME": str(tmp_path),
+        }
+    )
+
+    for _ in range(2):
+        with pytest.raises(ProviderAuthenticationError):
+            chat_completion_text(
+                "bailu-turing",
+                messages=[{"role": "user", "content": "long manuscript"}],
+                registry=registry,
+                client=client,
+            )
+
+    assert calls == 1
+
+
+def test_provider_text_request_fails_closed_without_credential(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ProviderAuthenticationError):
+        chat_completion_text(
+            "bailu-turing",
+            messages=[{"role": "user", "content": "write"}],
+            registry=ProviderRegistry(
+                env={"XDG_CONFIG_HOME": str(tmp_path)}
+            ),
+            client=object(),
+        )
+
+
 def test_scientific_memory_blocks_unsupported_and_contradicted_claims(tmp_path: Path) -> None:
     memory = ScientificMemory(tmp_path / "paperforge.db")
     source_id = memory.add_source(
@@ -170,7 +272,7 @@ def test_scientific_memory_blocks_unsupported_and_contradicted_claims(tmp_path: 
         uri="https://example.invalid/repo",
         commit_sha="abc",
         path="model.py",
-        blob_sha256="blob",
+        blob_sha256="b" * 64,
     )
     evidence_id = memory.add_evidence(
         evidence_type="SOURCE_CODE",
@@ -198,6 +300,34 @@ def test_scientific_memory_blocks_unsupported_and_contradicted_claims(tmp_path: 
     gate = memory.claim_gate()
     assert not gate["passed"]
     assert any(item["claim_id"] == blocked for item in gate["failures"])
+
+
+def test_scientific_memory_rejects_database_symlink_swap(
+    tmp_path: Path,
+) -> None:
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    database = trusted / "paperforge.db"
+    memory = ScientificMemory(database, trusted_root=trusted)
+    outside = tmp_path / "outside.db"
+    outside.write_bytes(database.read_bytes())
+    database.unlink()
+    try:
+        database.symlink_to(outside)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+
+    with pytest.raises(UnsafePathError), memory.connect():
+        pass
+
+
+def test_scientific_memory_creates_a_fresh_nested_parent(tmp_path: Path) -> None:
+    database = tmp_path / "fresh" / ".paperforge" / "paperforge.db"
+
+    memory = ScientificMemory(database)
+
+    assert memory.path == database
+    assert database.is_file()
 
 
 def test_claim_manifest_maps_tex_spans_to_evidence(tmp_path: Path) -> None:
@@ -239,11 +369,48 @@ def test_workflow_requires_all_completion_gates(tmp_path: Path) -> None:
     assert state["status"] == WorkflowStatus.COMPLETED.value
 
 
+def test_workflow_persistence_redacts_metadata_and_event_details(
+    tmp_path: Path,
+) -> None:
+    engine = WorkflowEngine(tmp_path)
+    secret = "sk-" + ("w" * 24)
+    workflow_id = engine.create(
+        ExecutionProfile.WRITING_ONLY,
+        metadata={"api_key": secret},
+    )
+    engine.transition(
+        workflow_id,
+        WorkflowStatus.RUNNING,
+        detail=f"credential={secret}",
+    )
+
+    state = engine.get(workflow_id)
+    with engine.memory.connect() as db:
+        detail = db.execute(
+            "SELECT detail FROM workflow_events WHERE workflow_id = ?",
+            (workflow_id,),
+        ).fetchone()["detail"]
+
+    assert secret not in repr(state["metadata"])
+    assert secret not in detail
+
+
 def test_full_profile_requires_approved_proposal(tmp_path: Path) -> None:
     engine = WorkflowEngine(tmp_path)
     with pytest.raises(PermissionError):
         engine.require_approval("proposal-1")
+    with pytest.raises(KeyError):
+        engine.approve("proposal-1", approved_by="owner")
 
-    engine.approve("proposal-1", approved_by="owner", scope={"stage": "mini"})
-    approval = engine.require_approval("proposal-1")
+    proposal = ExperimentManager(
+        tmp_path,
+        profile=ExecutionProfile.FULL,
+        memory=engine.memory,
+    ).propose(title="Approval fixture")
+    engine.approve(
+        proposal.proposal_id,
+        approved_by="owner",
+        scope={"stage": "mini"},
+    )
+    approval = engine.require_approval(proposal.proposal_id)
     assert approval["scope"] == {"stage": "mini"}

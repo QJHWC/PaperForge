@@ -9,6 +9,7 @@ from typing import Any
 
 from paperforge.claim_manifest import extract_latex_claim_units
 from paperforge.protected_blocks import ProtectedEditTransaction
+from paperforge.scientific_memory import valid_non_claim_metadata
 
 from .bundle import SourceBundler, verify_source_lock
 from .compiler import PublicationCompiler
@@ -56,6 +57,13 @@ def _sha256(path: Path | None) -> str | None:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _required_sha256(path: Path) -> str:
+    digest = _sha256(path)
+    if digest is None:
+        raise FileNotFoundError(path)
+    return digest
 
 
 def _relative_or_absolute(path: Path | None, project: Path) -> str | None:
@@ -151,9 +159,18 @@ class PublicationEngine:
         tex_text = tex_path.read_text(encoding="utf-8")
         selected_profile = self._select_profile(template, profile, tex_text)
         claim_manifest = None
+        effective_claim_spans = dict(claim_spans or {})
         if selected_memory is not None:
             claim_manifest = dict(selected_memory.claim_manifest(claim_spans or {}))
             claim_manifest.pop("generated_at", None)
+            if not effective_claim_spans:
+                for claim in claim_manifest.get("claims", ()):
+                    if not isinstance(claim, Mapping):
+                        continue
+                    claim_id = claim.get("claim_id")
+                    span = claim.get("tex_span")
+                    if isinstance(claim_id, str) and isinstance(span, Mapping):
+                        effective_claim_spans[claim_id] = dict(span)
             coverage = self._claim_coverage(tex_path, claim_manifest)
             claim_manifest["coverage"] = coverage
             gate["coverage"] = coverage
@@ -167,7 +184,7 @@ class PublicationEngine:
         invariant = InvariantSnapshot.capture(
             tex_text,
             scientific_memory=selected_memory,
-            claim_spans=claim_spans,
+            claim_spans=effective_claim_spans,
         )
 
         compiler = self.compiler or PublicationCompiler()
@@ -433,6 +450,21 @@ class PublicationEngine:
             compiler=compiler,
             gates=gates,
             claim_manifest=claim_manifest,
+            source_invariants={
+                "entrypoint_sha256": _required_sha256(tex_path),
+                "bibliography_sha256": _required_sha256(
+                    bibliography_path
+                ),
+                "claim_manifest_sha256": hashlib.sha256(
+                    json.dumps(
+                        claim_manifest,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ).encode("utf-8")
+                ).hexdigest(),
+                **invariant.fingerprint(),
+            },
             release_root=portable_root,
         )
         manifest_path.write_text(
@@ -540,23 +572,34 @@ class PublicationEngine:
                 "percent": 0.0,
                 "failures": [{"reason": "claim manifest has no claims list"}],
             }
-        mapped: set[tuple[str, int, int]] = set()
+        mapped: set[tuple[str, str, int, int]] = set()
         for claim in claims:
-            if not isinstance(claim, Mapping) or not claim.get("evidence"):
+            if not isinstance(claim, Mapping):
+                continue
+            metadata = claim.get("metadata")
+            non_claim_mapped = (
+                claim.get("claim_type") == "NON_CLAIM"
+                and isinstance(metadata, Mapping)
+                and valid_non_claim_metadata(
+                    str(claim.get("text", "")),
+                    metadata,
+                )
+            )
+            if not claim.get("evidence") and not non_claim_mapped:
                 continue
             span = claim.get("tex_span")
             if not isinstance(span, Mapping):
                 continue
             try:
                 key = (
+                    str(span.get("file", tex_path.name)),
                     str(claim.get("text", "")).strip(),
                     int(span["start"]),
                     int(span["end"]),
                 )
             except (KeyError, TypeError, ValueError):
                 continue
-            if str(span.get("file", tex_path.name)) == tex_path.name:
-                mapped.add(key)
+            mapped.add(key)
         failures = [
             {
                 "reason": "unmapped LaTeX claim",
@@ -566,7 +609,13 @@ class PublicationEngine:
                 "text": unit.text,
             }
             for unit in units
-            if (unit.text, unit.line_start, unit.line_end) not in mapped
+            if (
+                unit.file,
+                unit.text,
+                unit.line_start,
+                unit.line_end,
+            )
+            not in mapped
         ]
         mapped_count = len(units) - len(failures)
         percent = 100.0 if not units else round(100.0 * mapped_count / len(units), 2)
@@ -652,6 +701,7 @@ class PublicationEngine:
         compiler: Any,
         gates: Mapping[str, Any],
         claim_manifest: Mapping[str, Any] | None,
+        source_invariants: Mapping[str, str],
         release_root: Path,
     ) -> dict[str, Any]:
         toolchain = getattr(compiler, "toolchain", None)
@@ -682,6 +732,7 @@ class PublicationEngine:
             },
             "claim_gate": dict(gate),
             "claim_manifest": dict(claim_manifest) if claim_manifest is not None else None,
+            "source_invariants": dict(source_invariants),
             "gates": dict(gates),
             "round_limit": 3,
             "rounds": rounds_payload,
