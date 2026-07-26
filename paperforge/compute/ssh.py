@@ -151,8 +151,8 @@ $target = [Environment]::GetEnvironmentVariable("PAPERFORGE_ACL_PATH")
 if ([String]::IsNullOrWhiteSpace($target)) {
     throw "ACL target is unavailable"
 }
-$acl = Get-Acl -LiteralPath $target
 $sections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Group
+$acl = [System.IO.File]::GetAccessControl($target, $sections)
 $sddl = $acl.GetSecurityDescriptorSddlForm(
     $sections
 )
