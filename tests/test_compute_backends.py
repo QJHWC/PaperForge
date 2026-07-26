@@ -60,10 +60,28 @@ def _secure_test_file(path: Path, *, mode: int) -> None:
     if not username:
         raise RuntimeError("Windows test user is unavailable")
     subprocess.run(
+        ["icacls", str(path), "/inheritance:r"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    subprocess.run(
         [
             "icacls",
             str(path),
-            "/inheritance:r",
+            "/remove:g",
+            "*S-1-1-0",
+            "*S-1-5-11",
+            "*S-1-5-32-545",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    subprocess.run(
+        [
+            "icacls",
+            str(path),
             "/grant:r",
             f"{username}:(F)",
             "*S-1-5-18:(F)",

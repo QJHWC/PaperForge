@@ -141,10 +141,15 @@ def test_credential_file_requires_private_permissions(tmp_path: Path) -> None:
     if os.name == "nt":
         username = os.environ["USERNAME"]
         subprocess.run(
+            ["icacls", str(credentials), "/inheritance:r"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        subprocess.run(
             [
                 "icacls",
                 str(credentials),
-                "/inheritance:r",
                 "/grant:r",
                 f"{username}:(F)",
                 "*S-1-1-0:(R)",
@@ -164,7 +169,19 @@ def test_credential_file_requires_private_permissions(tmp_path: Path) -> None:
             [
                 "icacls",
                 str(credentials),
-                "/inheritance:r",
+                "/remove:g",
+                "*S-1-1-0",
+                "*S-1-5-11",
+                "*S-1-5-32-545",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        subprocess.run(
+            [
+                "icacls",
+                str(credentials),
                 "/grant:r",
                 f"{username}:(F)",
                 "*S-1-5-18:(F)",

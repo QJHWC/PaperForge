@@ -108,11 +108,11 @@ def _validate_windows_acl_payload(
         effective = rights & ~_WINDOWS_SYNCHRONIZE
         if private and effective:
             raise SSHSecurityError(
-                f"{label} Windows ACL permits access by an untrusted principal"
+                f"{label} Windows ACL permits access by untrusted principal {sid}"
             )
         if not private and rights & _WINDOWS_WRITE_MASK:
             raise SSHSecurityError(
-                f"{label} Windows ACL permits writes by an untrusted principal"
+                f"{label} Windows ACL permits writes by untrusted principal {sid}"
             )
 
 
