@@ -45,7 +45,11 @@ from paperforge.policy import ExecutionPolicy, PolicyViolation
 
 
 def _local_test_timeout(seconds: int = 5) -> int:
-    return 20 if os.name == "nt" else seconds
+    return 60 if os.name == "nt" else seconds
+
+
+def _local_process_timeout(seconds: int = 5) -> int:
+    return 30 if os.name == "nt" else seconds
 
 
 def _secure_test_file(path: Path, *, mode: int) -> None:
@@ -1489,7 +1493,7 @@ def test_local_resume_uses_fresh_attempt_artifacts(tmp_path: Path) -> None:
             command=[sys.executable, "-c", code],
             workdir=workdir,
             outputs=["result.txt"],
-            resources=ResourceSpec(timeout_seconds=_local_test_timeout()),
+            resources=ResourceSpec(timeout_seconds=_local_process_timeout()),
             execute=True,
         )
     )

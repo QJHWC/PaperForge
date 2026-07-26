@@ -151,8 +151,13 @@ if ([String]::IsNullOrWhiteSpace($target)) {
     throw "ACL target is unavailable"
 }
 $acl = Get-Acl -LiteralPath $target
+$sections = (
+    [System.Security.AccessControl.AccessControlSections]::Access -bor
+    [System.Security.AccessControl.AccessControlSections]::Owner -bor
+    [System.Security.AccessControl.AccessControlSections]::Group
+)
 $sddl = $acl.GetSecurityDescriptorSddlForm(
-    [System.Security.AccessControl.AccessControlSections]::All
+    $sections
 )
 $descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new($sddl)
 $daclPresent = (

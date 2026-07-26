@@ -726,7 +726,9 @@ def test_docker_binding_mounts_approved_snapshot_read_only(
         if value == "--volume"
     ]
     assert any(
-        volume.endswith("/attempts/1/workspace:/workspace:ro")
+        volume.replace("\\", "/").endswith(
+            "/attempts/1/workspace:/workspace:ro"
+        )
         for volume in volumes
     )
     assert "/paperforge-outputs:rw,noexec,nosuid,nodev,size=64m" in argv
