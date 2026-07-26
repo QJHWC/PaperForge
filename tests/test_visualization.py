@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import struct
-import subprocess
 import zlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from paperforge.plugins import VisualizationSpec
+from paperforge.publication import visual_checks
 from paperforge.publication.visual_checks import (
     _pdftohtml_layout_boxes,
     inspect_page_structure,
@@ -215,6 +216,7 @@ def test_pdftohtml_layout_fallback_parses_text_bounds() -> None:
 
 def test_structural_page_review_rejects_intersecting_text_boxes(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fitz = pytest.importorskip("fitz")
     document = fitz.open()
@@ -225,21 +227,45 @@ def test_structural_page_review_rejects_intersecting_text_boxes(
             "overlapping scientific result",
         )
     pdf = tmp_path / "overlap.pdf"
+    rendered_page = tmp_path / "overlap-page-1.png"
+    page.get_pixmap(dpi=120, alpha=False).save(rendered_page)
     document.save(pdf)
     document.close()
-    prefix = tmp_path / "overlap-page"
-    subprocess.run(
-        ["pdftoppm", "-png", "-r", "120", str(pdf), str(prefix)],
-        check=True,
-        capture_output=True,
-    )
-    rendered = (tmp_path / "overlap-page-1.png",)
+    rendered = (rendered_page,)
     integrity = inspect_rendered_pages(rendered)
+    pdftotext = tmp_path / "pdftotext"
+    pdftotext.write_text("", encoding="utf-8")
+    layout = (
+        "<doc><page>"
+        + "".join(
+            (
+                f'<word xMin="{72 + index * 0.7}" yMin="{72 + index * 0.05}" '
+                f'xMax="{210 + index * 0.7}" yMax="{84 + index * 0.05}">'
+                "overlapping scientific result</word>"
+            )
+            for index in range(20)
+        )
+        + "</page></doc>"
+    ).encode()
+
+    def fake_pdftotext(
+        argv: list[str],
+        **_: object,
+    ) -> SimpleNamespace:
+        stdout = (
+            layout
+            if "-bbox-layout" in argv
+            else ("overlapping scientific result " * 20).encode()
+        )
+        return SimpleNamespace(returncode=0, stdout=stdout)
+
+    monkeypatch.setattr(visual_checks.subprocess, "run", fake_pdftotext)
 
     review = inspect_page_structure(
         pdf,
         rendered,
         render_integrity=integrity,
+        pdftotext=pdftotext,
     )
 
     assert not review["passed"]

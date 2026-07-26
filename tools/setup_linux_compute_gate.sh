@@ -121,6 +121,18 @@ printf '%s\n' \
   '  resources: {requests: {storage: 1Gi}}' \
   | kubectl --context kind-paperforge-v3 apply -f -
 
+if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
+  target_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+  target_group="$(id -gn "$SUDO_USER")"
+  if [[ -z "$target_home" || ! -f /root/.kube/config ]]; then
+    echo "unable to publish the Kind context to the invoking user" >&2
+    exit 2
+  fi
+  install -d -m 0700 -o "$SUDO_USER" -g "$target_group" "$target_home/.kube"
+  install -m 0600 -o "$SUDO_USER" -g "$target_group" \
+    /root/.kube/config "$target_home/.kube/config"
+fi
+
 kind version
 kubectl version --client
 singularity version

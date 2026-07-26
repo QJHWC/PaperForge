@@ -711,7 +711,8 @@ def test_docker_binding_mounts_approved_snapshot_read_only(
     )
     config = dict(binding["compute_config"])
     config["workspace_mount"] = str(snapshot)
-    planned = DockerBackend(DockerConfig(**config)).submit(spec, execute=False)
+    backend = DockerBackend(DockerConfig(**config))
+    planned = backend.submit(spec, execute=False)
     argv = planned.command
 
     assert argv[argv.index("--network") + 1] == "none"
@@ -725,16 +726,37 @@ def test_docker_binding_mounts_approved_snapshot_read_only(
         for index, value in enumerate(argv)
         if value == "--volume"
     ]
-    assert any(
-        volume.endswith("/attempts/1/workspace:/workspace:ro")
-        for volume in volumes
+    workspace_volume = next(
+        volume for volume in volumes if volume.endswith(":/workspace:ro")
     )
+    workspace_host = Path(workspace_volume.removesuffix(":/workspace:ro"))
+    expected_workspace = (
+        backend.state_dir
+        / "docker"
+        / planned.job_id
+        / "attempts"
+        / "1"
+        / "workspace"
+    )
+    assert workspace_host == expected_workspace
     assert "/paperforge-outputs:rw,noexec,nosuid,nodev,size=64m" in argv
-    assert any(
-        volume.endswith(
-            "artifacts/results/metrics.json:/paperforge-outputs/0:rw"
-        )
+    artifact_volume = next(
+        volume
         for volume in volumes
+        if volume.endswith(":/paperforge-outputs/0:rw")
+    )
+    artifact_host = Path(
+        artifact_volume.removesuffix(":/paperforge-outputs/0:rw")
+    )
+    assert artifact_host == (
+        backend.state_dir
+        / "docker"
+        / planned.job_id
+        / "attempts"
+        / "1"
+        / "artifacts"
+        / "results"
+        / "metrics.json"
     )
     assert verify_compute_binding(tmp_path, binding) == (True, "verified")
 

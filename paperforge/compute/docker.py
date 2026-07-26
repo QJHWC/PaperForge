@@ -10,7 +10,7 @@ import sys
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from paperforge.path_safety import (
@@ -48,6 +48,14 @@ _FORBIDDEN_EXTRA_ARGS = frozenset(
 )
 
 
+def _host_container_user() -> str:
+    getuid = vars(os).get("getuid")
+    getgid = vars(os).get("getgid")
+    if not callable(getuid) or not callable(getgid):
+        return "65532:65532"
+    return f"{getuid()}:{getgid()}"
+
+
 @dataclass(frozen=True)
 class DockerConfig:
     image: str
@@ -61,7 +69,15 @@ class DockerConfig:
     def __post_init__(self) -> None:
         if not self.image or "\x00" in self.image:
             raise ValueError("docker image must be non-empty")
-        if not _RUNTIME_PATTERN.fullmatch(self.runtime):
+        windows_runtime = PureWindowsPath(self.runtime)
+        safe_windows_runtime = (
+            os.name == "nt"
+            and windows_runtime.is_absolute()
+            and ".." not in windows_runtime.parts
+            and not self.runtime.startswith(("\\\\", "//"))
+            and not any(ord(character) < 32 for character in self.runtime)
+        )
+        if not _RUNTIME_PATTERN.fullmatch(self.runtime) and not safe_windows_runtime:
             raise ValueError("docker runtime contains unsafe characters")
         workdir = PurePosixPath(self.container_workdir)
         if not workdir.is_absolute() or ".." in workdir.parts:
@@ -219,12 +235,7 @@ class DockerBackend(ComputeBackend):
             "--security-opt",
             "no-new-privileges",
             "--user",
-            self.config.container_user
-            or (
-                f"{os.getuid()}:{os.getgid()}"
-                if hasattr(os, "getuid")
-                else "65532:65532"
-            ),
+            self.config.container_user or _host_container_user(),
             "--pids-limit",
             "512",
             "--tmpfs",

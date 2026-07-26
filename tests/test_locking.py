@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import multiprocessing as mp
+import os
 import tempfile
 import time
 import unittest
@@ -29,7 +30,10 @@ class RunLockTest(unittest.TestCase):
             queue: mp.Queue[str] = mp.Queue()
             proc = mp.Process(target=_hold_lock, args=(str(workspace), queue))
             proc.start()
-            self.assertEqual(queue.get(timeout=2), "locked")
+            self.assertEqual(
+                queue.get(timeout=10 if os.name == "nt" else 2),
+                "locked",
+            )
 
             with self.assertRaises(RunLockTimeoutError):
                 with run_lock(workspace, timeout=0.1, poll_interval=0.02, verbose=False):

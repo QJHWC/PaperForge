@@ -745,29 +745,34 @@ class LocalBackend(ComputeBackend):
             powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
             if powershell is None:
                 return False
-            inspected = subprocess.run(
-                [
-                    powershell,
-                    "-NoLogo",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    (
-                        "$p = Get-CimInstance Win32_Process -Filter "
-                        f"\"ProcessId = {raw_pid}\"; "
-                        "if ($null -ne $p) { [Console]::Out.Write($p.CommandLine) }"
-                    ),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            command = inspected.stdout.strip()
-            return (
-                inspected.returncode == 0
-                and "paperforge.compute._local_supervisor" in command
-                and str(metadata["launch_path"]) in command
-            )
+            for attempt in range(3):
+                inspected = subprocess.run(
+                    [
+                        powershell,
+                        "-NoLogo",
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-Command",
+                        (
+                            "$p = Get-CimInstance Win32_Process -Filter "
+                            f"\"ProcessId = {raw_pid}\"; "
+                            "if ($null -ne $p) { "
+                            "[Console]::Out.Write($p.CommandLine) }"
+                        ),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                command = inspected.stdout.strip()
+                if inspected.returncode == 0 and command:
+                    return (
+                        "paperforge.compute._local_supervisor" in command
+                        and str(metadata["launch_path"]) in command
+                    )
+                if attempt < 2:
+                    time.sleep(0.05)
+            return False
         try:
             os.kill(raw_pid, 0)
         except (OSError, ProcessLookupError):
@@ -788,7 +793,8 @@ class LocalBackend(ComputeBackend):
     @staticmethod
     def _signal_supervisor(pid: int, *, force: bool) -> None:
         if os.name != "nt":
-            os.kill(pid, signal.SIGKILL if force else signal.SIGTERM)
+            force_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+            os.kill(pid, force_signal if force else signal.SIGTERM)
             return
         if force:
             subprocess.run(
@@ -930,6 +936,11 @@ class LocalBackend(ComputeBackend):
             return completion
         if self._supervisor_alive(job_id, dict(previous.metadata)):
             return previous
+        time.sleep(0.05)
+        completion = self._completion_result(job_id, previous)
+        if completion is not None:
+            self._remember(job_id, result=completion)
+            return completion
         process = self._processes.get(job_id)
         if process is not None and process.poll() is not None:
             time.sleep(0.05)

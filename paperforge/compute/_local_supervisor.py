@@ -42,6 +42,13 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
             Path(temporary).unlink(missing_ok=True)
 
 
+def _kill_process_group(pid: int, sig: int) -> None:
+    killpg = getattr(os, "killpg", None)
+    if killpg is None:
+        raise AttributeError("process-group signaling is unavailable")
+    killpg(pid, sig)
+
+
 def _terminate(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
@@ -55,7 +62,7 @@ def _terminate(process: subprocess.Popen[bytes]) -> None:
             process.terminate()
     else:
         try:
-            os.killpg(process.pid, signal.SIGTERM)
+            _kill_process_group(process.pid, signal.SIGTERM)
         except (AttributeError, ProcessLookupError):
             process.terminate()
     try:
@@ -65,7 +72,10 @@ def _terminate(process: subprocess.Popen[bytes]) -> None:
             process.kill()
         else:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                _kill_process_group(
+                    process.pid,
+                    getattr(signal, "SIGKILL", signal.SIGTERM),
+                )
             except (AttributeError, ProcessLookupError):
                 process.kill()
         process.wait(timeout=5)
