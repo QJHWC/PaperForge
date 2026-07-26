@@ -504,6 +504,8 @@ class SSHBackend(ComputeBackend):
         exit_path = attempt_dir / "exit_code"
         cancelled_path = attempt_dir / "cancelled"
         timed_out_path = attempt_dir / "timed_out"
+        timeout_cleanup_done_path = attempt_dir / "timeout_cleanup_done"
+        timeout_cleanup_pending_path = attempt_dir / "timeout_cleanup_pending"
         cid_path = attempt_dir / "container_id"
         workdir = self._remote_workdir(spec, job_id)
         if ".." in workdir.parts or "\x00" in workdir.as_posix():
@@ -572,8 +574,39 @@ class SSHBackend(ComputeBackend):
             if spec.metadata.get("remote_source_sha256"):
                 stop_container = (
                     f"cid=$(cat {shlex.quote(cid_path.as_posix())} 2>/dev/null || true); "
-                    f"if [ -n \"$cid\" ] && [ \"$({runtime} inspect --format '{{{{.Id}}}}' {container_name} 2>/dev/null)\" = \"$cid\" ]; then "
-                    f"{runtime} rm -f {container_name} >/dev/null 2>&1 || true; fi; "
+                    f"printf '%s\\n' \"$cid\" > "
+                    f"{shlex.quote(timeout_cleanup_pending_path.as_posix())}; "
+                    f"inspected=$({runtime} inspect --format "
+                    f"'{{{{.Id}}}}|{{{{.Name}}}}' \"$cid\" 2>/dev/null); "
+                    "inspect_rc=$?; "
+                    "inspected_id=${inspected%%|*}; "
+                    "inspected_name=${inspected#*|}; "
+                    "inspected_name=${inspected_name#/}; "
+                    f"expected_name={container_name}; "
+                    'if [ -n "$cid" ] && [ "$inspect_rc" -eq 0 ] && '
+                    '[ "$inspected_id" = "$cid" ] && '
+                    '[ "$inspected_name" = "$expected_name" ]; then '
+                    f"if {runtime} rm -f \"$cid\" >/dev/null 2>&1; then "
+                    f"if {runtime} inspect --format '{{{{.Id}}}}' \"$cid\" "
+                    ">/dev/null 2>&1; then :; "
+                    "else "
+                    f"listed=$({runtime} ps -a --no-trunc --filter \"id=$cid\" "
+                    f"--format '{{{{.ID}}}}' 2>/dev/null); list_rc=$?; "
+                    'if [ "$list_rc" -eq 0 ] && [ -z "$listed" ] && '
+                    f"{runtime} info >/dev/null 2>&1; then "
+                    f"printf '%s\\n' \"$cid\" > "
+                    f"{shlex.quote(timeout_cleanup_done_path.as_posix())}; "
+                    f"rm -f {shlex.quote(timeout_cleanup_pending_path.as_posix())}; "
+                    "fi; fi; fi; "
+                    'elif [ -n "$cid" ] && [ "$inspect_rc" -ne 0 ]; then '
+                    f"listed=$({runtime} ps -a --no-trunc --filter \"id=$cid\" "
+                    f"--format '{{{{.ID}}}}' 2>/dev/null); list_rc=$?; "
+                    'if [ "$list_rc" -eq 0 ] && [ -z "$listed" ] && '
+                    f"{runtime} info >/dev/null 2>&1; then "
+                    f"printf '%s\\n' \"$cid\" > "
+                    f"{shlex.quote(timeout_cleanup_done_path.as_posix())}; "
+                    f"rm -f {shlex.quote(timeout_cleanup_pending_path.as_posix())}; "
+                    "fi; fi; "
                 )
             watcher = (
                 f"sleep {int(spec.resources.timeout_seconds)}; "
@@ -1107,6 +1140,8 @@ class SSHBackend(ComputeBackend):
         exit_path = attempt_dir / "exit_code"
         cancelled_path = attempt_dir / "cancelled"
         timed_out_path = attempt_dir / "timed_out"
+        timeout_cleanup_done_path = attempt_dir / "timeout_cleanup_done"
+        timeout_cleanup_pending_path = attempt_dir / "timeout_cleanup_pending"
         pid = str(metadata["remote_pid"])
         start = str(metadata["remote_start_time"])
         nonce = str(metadata["identity_nonce"])
@@ -1125,6 +1160,10 @@ class SSHBackend(ComputeBackend):
             f"[ \"$(awk '{{print $22}}' /proc/{pid}/stat)\" = {shlex.quote(start)} ]"
         )
         container_identity = ""
+        timeout_status = (
+            f"printf 'TIMED_OUT|124|%s\\n' "
+            f"\"$(cat {shlex.quote(cid_path.as_posix())} 2>/dev/null || true)\""
+        )
         if spec.metadata.get("remote_source_sha256"):
             runtime = shlex.quote(self.config.remote_container_runtime)
             name = shlex.quote(str(metadata["remote_container_name"]))
@@ -1134,10 +1173,66 @@ class SSHBackend(ComputeBackend):
             identity_check += (
                 f" && [ \"$(cat {shlex.quote(cid_path.as_posix())})\" = {shlex.quote(expected_cid)} ]"
             )
+            timeout_status = (
+                f"cid={shlex.quote(expected_cid)}; "
+                f"done_cid=$(cat {shlex.quote(timeout_cleanup_done_path.as_posix())} "
+                "2>/dev/null || true); "
+                f"pending_cid=$(cat {shlex.quote(timeout_cleanup_pending_path.as_posix())} "
+                "2>/dev/null || true); "
+                'if [ -n "$done_cid" ] && [ "$done_cid" != "$cid" ]; then '
+                "printf 'CLEANUP_BLOCKED||%s\\n' \"$cid\"; "
+                'elif [ -n "$pending_cid" ] && [ "$pending_cid" != "$cid" ]; then '
+                "printf 'CLEANUP_BLOCKED||%s\\n' \"$cid\"; "
+                'elif [ "$done_cid" = "$cid" ]; then '
+                "printf 'TIMED_OUT|124|%s\\n' \"$cid\"; "
+                "else "
+                f"inspected=$({runtime} inspect --format "
+                f"'{{{{.Id}}}}|{{{{.Name}}}}' \"$cid\" 2>/dev/null); "
+                "inspect_rc=$?; "
+                "inspected_id=${inspected%%|*}; "
+                "inspected_name=${inspected#*|}; "
+                "inspected_name=${inspected_name#/}; "
+                f"expected_name={name}; "
+                'if [ "$inspect_rc" -eq 0 ] && '
+                '{ [ "$inspected_id" != "$cid" ] || '
+                '[ "$inspected_name" != "$expected_name" ]; }; then '
+                "printf 'CLEANUP_BLOCKED||%s\\n' \"$cid\"; "
+                'elif [ "$inspect_rc" -eq 0 ]; then '
+                f"printf '%s\\n' \"$cid\" > "
+                f"{shlex.quote(timeout_cleanup_pending_path.as_posix())}; "
+                f"if {runtime} rm -f \"$cid\" >/dev/null 2>&1; then "
+                f"if {runtime} inspect --format '{{{{.Id}}}}' \"$cid\" "
+                ">/dev/null 2>&1; then "
+                "printf 'CLEANUP_PENDING||%s\\n' \"$cid\"; "
+                "else "
+                f"listed=$({runtime} ps -a --no-trunc --filter \"id=$cid\" "
+                f"--format '{{{{.ID}}}}' 2>/dev/null); list_rc=$?; "
+                'if [ "$list_rc" -eq 0 ] && [ -z "$listed" ] && '
+                f"{runtime} info >/dev/null 2>&1; then "
+                f"printf '%s\\n' \"$cid\" > "
+                f"{shlex.quote(timeout_cleanup_done_path.as_posix())}; "
+                f"rm -f {shlex.quote(timeout_cleanup_pending_path.as_posix())}; "
+                "printf 'TIMED_OUT|124|%s\\n' \"$cid\"; "
+                "else printf 'CLEANUP_PENDING||%s\\n' \"$cid\"; fi; fi; "
+                "else printf 'CLEANUP_PENDING||%s\\n' \"$cid\"; fi; "
+                "else "
+                f"listed=$({runtime} ps -a --no-trunc --filter \"id=$cid\" "
+                f"--format '{{{{.ID}}}}' 2>/dev/null); list_rc=$?; "
+                'if [ "$list_rc" -eq 0 ] && [ -z "$listed" ] && '
+                f"{runtime} info >/dev/null 2>&1; then "
+                f"printf '%s\\n' \"$cid\" > "
+                f"{shlex.quote(timeout_cleanup_done_path.as_posix())}; "
+                f"rm -f {shlex.quote(timeout_cleanup_pending_path.as_posix())}; "
+                "printf 'TIMED_OUT|124|%s\\n' \"$cid\"; "
+                "else "
+                f"printf '%s\\n' \"$cid\" > "
+                f"{shlex.quote(timeout_cleanup_pending_path.as_posix())}; "
+                "printf 'CLEANUP_PENDING||%s\\n' \"$cid\"; fi; fi; fi"
+            )
         script = (
             f"if ! {{ {identity_check}; }}; then printf 'UNKNOWN||\\n'; "
             f"elif [ -f {shlex.quote(timed_out_path.as_posix())} ]; then "
-            f"printf 'TIMED_OUT|124|%s\\n' \"$(cat {shlex.quote(cid_path.as_posix())} 2>/dev/null || true)\"; "
+            f"{timeout_status}; "
             f"elif [ -f {shlex.quote(cancelled_path.as_posix())} ]; then "
             f"printf 'CANCELLED||%s\\n' \"$(cat {shlex.quote(cid_path.as_posix())} 2>/dev/null || true)\"; "
             f"elif [ -f {shlex.quote(exit_path.as_posix())} ]; then "
@@ -1263,6 +1358,8 @@ class SSHBackend(ComputeBackend):
             "SUCCEEDED": JobStatus.SUCCEEDED,
             "FAILED": JobStatus.FAILED,
             "CANCELLED": JobStatus.CANCELLED,
+            "CLEANUP_BLOCKED": JobStatus.UNKNOWN,
+            "CLEANUP_PENDING": JobStatus.RUNNING,
             "TIMED_OUT": JobStatus.FAILED,
             "UNKNOWN": JobStatus.UNKNOWN,
         }
@@ -1272,7 +1369,11 @@ class SSHBackend(ComputeBackend):
         return_code = int(code_text) if code_text.lstrip("-").isdigit() else None
         if remote_cid:
             metadata["remote_container_id"] = remote_cid
-        if state_text == "TIMED_OUT":
+        if state_text in {"CLEANUP_BLOCKED", "CLEANUP_PENDING"}:
+            metadata["timeout_cleanup_pending"] = True
+            metadata.pop("timed_out", None)
+        elif state_text == "TIMED_OUT":
+            metadata.pop("timeout_cleanup_pending", None)
             metadata["timed_out"] = True
         result = JobResult(
             job_id=job_id,
@@ -1413,6 +1514,10 @@ class SSHBackend(ComputeBackend):
         if current.metadata.get("cleanup_pending") is True:
             raise RuntimeError(
                 f"cannot resume unresolved SSH launch {job_id}"
+            )
+        if current.metadata.get("timeout_cleanup_pending") is True:
+            raise RuntimeError(
+                f"cannot resume unresolved SSH cleanup {job_id}"
             )
         if current.status in {
             JobStatus.SUBMITTED,

@@ -155,6 +155,43 @@ class _SSHIdentityRunner:
         return CommandOutcome(0, f"123|456|{self.container_id}\n", "")
 
 
+class _SSHTimeoutCleanupRunner:
+    container_id = "f" * 64
+
+    def __init__(self, *, cwd: Path, env: Mapping[str, str]) -> None:
+        self.commands: list[tuple[str, ...]] = []
+        self.cwd = cwd
+        self.env = dict(env)
+
+    def run(
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: str | Path | None = None,
+        env: Mapping[str, str] | None = None,
+        timeout: int | None = None,
+    ) -> CommandOutcome:
+        del cwd, env, timeout
+        command = tuple(argv)
+        self.commands.append(command)
+        script = command[-1]
+        if "TIMED_OUT|124" not in script:
+            return CommandOutcome(0, f"123|456|{self.container_id}\n", "")
+        completed = subprocess.run(
+            ["/bin/sh", "-c", script],
+            cwd=self.cwd,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return CommandOutcome(
+            completed.returncode,
+            completed.stdout,
+            completed.stderr,
+        )
+
+
 class _SSHLaunchTimeoutRunner:
     def __init__(self) -> None:
         self.commands: list[tuple[str, ...]] = []
@@ -1712,6 +1749,181 @@ def test_ssh_status_and_cancel_bind_pid_start_container_and_binding(
     assert len(runner.commands) == before + 1
     assert "if [" in runner.commands[-1][-1]
     assert "then" in runner.commands[-1][-1]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="generated SSH script requires POSIX sh")
+@pytest.mark.parametrize(
+    ("runtime", "name_prefix"),
+    (("docker", "/"), ("podman", "")),
+)
+def test_ssh_timeout_status_waits_for_bound_container_cleanup(
+    tmp_path: Path,
+    runtime: str,
+    name_prefix: str,
+) -> None:
+    base = _ssh_config(tmp_path)
+    runtime_state = tmp_path / "runtime-state"
+    runtime_state.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_runtime = fake_bin / runtime
+    fake_runtime.write_text(
+        """#!/bin/sh
+state=${PAPERFORGE_FAKE_RUNTIME_STATE:?}
+cid=${PAPERFORGE_FAKE_CONTAINER_ID:?}
+name=${PAPERFORGE_FAKE_CONTAINER_NAME:?}
+prefix=${PAPERFORGE_FAKE_NAME_PREFIX-}
+case "$1" in
+  inspect)
+    [ ! -f "$state/daemon_down" ] || exit 1
+    [ ! -f "$state/inspect_fail" ] || exit 1
+    [ -f "$state/container_exists" ] || exit 1
+    if [ "$3" = "{{.Id}}|{{.Name}}" ]; then
+      printf '%s|%s%s\\n' "$cid" "$prefix" "$name"
+    else
+      printf '%s\\n' "$cid"
+    fi
+    ;;
+  rm)
+    [ ! -f "$state/rm_fail" ] || exit 1
+    rm -f "$state/container_exists"
+    ;;
+  ps)
+    [ ! -f "$state/daemon_down" ] || exit 1
+    if [ -f "$state/container_exists" ]; then
+      printf '%s\\n' "$cid"
+    fi
+    ;;
+  info)
+    [ ! -f "$state/daemon_down" ] || exit 1
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_runtime.chmod(0o755)
+    config = SSHConfig(
+        host=base.host,
+        user=base.user,
+        known_hosts_file=base.known_hosts_file,
+        identity_file=base.identity_file,
+        remote_root="remote/jobs",
+        remote_container_runtime=runtime,
+        remote_container_runtime_sha256="b" * 64,
+        remote_container_image="fixture@sha256:" + ("c" * 64),
+    )
+    container_name = SSHBackend._remote_container_name("timeout-cleanup", 1)
+    runner = _SSHTimeoutCleanupRunner(
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+            "PAPERFORGE_FAKE_RUNTIME_STATE": str(runtime_state),
+            "PAPERFORGE_FAKE_CONTAINER_ID": _SSHTimeoutCleanupRunner.container_id,
+            "PAPERFORGE_FAKE_CONTAINER_NAME": container_name,
+            "PAPERFORGE_FAKE_NAME_PREFIX": name_prefix,
+        },
+    )
+    backend = SSHBackend(
+        config,
+        runner=runner,
+        policy=ExecutionPolicy(ExecutionProfile.FULL),
+        state_dir=tmp_path / "state",
+    )
+    submitted = backend.submit(
+        JobSpec(
+            name="timeout-cleanup",
+            job_id="timeout-cleanup",
+            command=["python", "run.py"],
+            workdir=tmp_path,
+            metadata={"remote_source_sha256": "f" * 64},
+            resources=ResourceSpec(timeout_seconds=1),
+            execute=True,
+        ),
+        execute=True,
+    )
+    attempt_dir = tmp_path / "remote" / "jobs" / submitted.job_id / "attempts" / "1"
+    attempt_dir.mkdir(parents=True)
+    (attempt_dir / "pid").write_text("123\n", encoding="utf-8")
+    (attempt_dir / "pid_start").write_text("456\n", encoding="utf-8")
+    (attempt_dir / "identity").write_text(
+        "\n".join(
+            (
+                str(submitted.metadata["identity_nonce"]),
+                str(submitted.metadata["binding_digest"]),
+                "1",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    (attempt_dir / "container_id").write_text(
+        _SSHTimeoutCleanupRunner.container_id + "\n",
+        encoding="utf-8",
+    )
+    (attempt_dir / "timed_out").write_text("TIMED_OUT\n", encoding="utf-8")
+    (runtime_state / "container_exists").touch()
+
+    (runtime_state / "inspect_fail").touch()
+    inspect_unavailable = backend.status(submitted.job_id, execute=True)
+    (runtime_state / "inspect_fail").unlink()
+    (attempt_dir / "timeout_cleanup_pending").write_text(
+        "e" * 64 + "\n",
+        encoding="utf-8",
+    )
+    marker_mismatch = backend.status(submitted.job_id, execute=True)
+    with pytest.raises(RuntimeError, match="unresolved SSH cleanup"):
+        backend.resume(submitted.job_id, execute=True)
+    (attempt_dir / "timeout_cleanup_pending").write_text(
+        _SSHTimeoutCleanupRunner.container_id + "\n",
+        encoding="utf-8",
+    )
+    (runtime_state / "daemon_down").touch()
+    daemon_unavailable = backend.status(submitted.job_id, execute=True)
+    (runtime_state / "daemon_down").unlink()
+    (runtime_state / "rm_fail").touch()
+    cleanup_retry = backend.status(submitted.job_id, execute=True)
+    (runtime_state / "rm_fail").unlink()
+    terminal = backend.status(submitted.job_id, execute=True)
+    (runtime_state / "daemon_down").touch()
+    repeated = backend.status(submitted.job_id, execute=True)
+    submit_script = runner.commands[0][-1]
+    status_script = runner.commands[1][-1]
+    timeout_branch = status_script.split("elif [ -f", 1)[1].split("elif [ -f", 1)[0]
+
+    assert "timeout_cleanup_pending" in submit_script
+    assert "timeout_cleanup_done" in submit_script
+    assert "'{{.Id}}|{{.Name}}'" in submit_script
+    assert 'rm -f "$cid"' in submit_script
+    assert "TIMED_OUT|124" in status_script
+    assert "inspect --format" in timeout_branch
+    assert "rm -f" in timeout_branch
+    assert "ps -a --no-trunc" in timeout_branch
+    assert " info " in timeout_branch
+    assert "CLEANUP_PENDING" in timeout_branch
+    assert inspect_unavailable.status is JobStatus.RUNNING
+    assert inspect_unavailable.metadata["timeout_cleanup_pending"] is True
+    assert marker_mismatch.status is JobStatus.UNKNOWN
+    assert marker_mismatch.metadata["timeout_cleanup_pending"] is True
+    assert daemon_unavailable.status is JobStatus.RUNNING
+    assert daemon_unavailable.metadata["timeout_cleanup_pending"] is True
+    assert "timed_out" not in daemon_unavailable.metadata
+    assert cleanup_retry.status is JobStatus.RUNNING
+    assert cleanup_retry.metadata["timeout_cleanup_pending"] is True
+    assert terminal.status is JobStatus.FAILED
+    assert terminal.return_code == 124
+    assert "timeout_cleanup_pending" not in terminal.metadata
+    assert terminal.metadata["timed_out"] is True
+    assert repeated.status is JobStatus.FAILED
+    assert repeated.return_code == 124
+    assert (attempt_dir / "timeout_cleanup_done").read_text().strip() == (
+        _SSHTimeoutCleanupRunner.container_id
+    )
+    assert not (attempt_dir / "timeout_cleanup_pending").exists()
+    assert not (runtime_state / "container_exists").exists()
 
 
 def test_kubernetes_artifact_plan_contains_no_placeholder(tmp_path: Path) -> None:
