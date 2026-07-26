@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -136,13 +138,60 @@ def test_primary_and_writeup_credentials_may_be_distinct() -> None:
 def test_credential_file_requires_private_permissions(tmp_path: Path) -> None:
     credentials = tmp_path / "credentials.json"
     credentials.write_text(json.dumps({"bailu_primary": "secret"}), encoding="utf-8")
-    credentials.chmod(0o644)
+    if os.name == "nt":
+        username = os.environ["USERNAME"]
+        subprocess.run(
+            [
+                "icacls",
+                str(credentials),
+                "/inheritance:r",
+                "/grant:r",
+                f"{username}:(F)",
+                "*S-1-1-0:(R)",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    else:
+        credentials.chmod(0o644)
 
     with pytest.raises(ProviderConfigurationError):
         CredentialResolver(env={}, config_dir=tmp_path).resolve("bailu_primary")
 
-    credentials.chmod(0o600)
+    if os.name == "nt":
+        subprocess.run(
+            [
+                "icacls",
+                str(credentials),
+                "/inheritance:r",
+                "/grant:r",
+                f"{username}:(F)",
+                "*S-1-5-18:(F)",
+                "*S-1-5-32-544:(F)",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    else:
+        credentials.chmod(0o600)
     assert CredentialResolver(env={}, config_dir=tmp_path).resolve("bailu_primary") == "secret"
+
+
+def test_credential_resolver_allows_environment_only_operation_without_home(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable_home() -> Path:
+        raise RuntimeError("home is unavailable")
+
+    monkeypatch.setattr(Path, "home", unavailable_home)
+    resolver = CredentialResolver(
+        env={"PAPERFORGE_CREDENTIAL_BAILU_PRIMARY": "environment-secret"}
+    )
+
+    assert resolver.resolve("bailu_primary") == "environment-secret"
+    assert CredentialResolver(env={}).resolve("missing") is None
 
 
 def test_provider_preflight_classifies_auth_failure() -> None:

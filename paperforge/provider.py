@@ -231,9 +231,16 @@ class CredentialResolver:
         config_dir: Path | None = None,
     ) -> None:
         self.env = dict(os.environ if env is None else env)
-        self.config_dir = config_dir or (
-            Path(self.env.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "paperforge"
-        )
+        self.config_dir: Path | None
+        if config_dir is not None:
+            self.config_dir = config_dir
+        elif xdg_config_home := str(self.env.get("XDG_CONFIG_HOME", "")).strip():
+            self.config_dir = Path(xdg_config_home) / "paperforge"
+        else:
+            try:
+                self.config_dir = Path.home() / ".config" / "paperforge"
+            except RuntimeError:
+                self.config_dir = None
 
     def resolve(self, alias: str, *, legacy_names: tuple[str, ...] = ()) -> str | None:
         canonical_name = f"PAPERFORGE_CREDENTIAL_{alias.upper().replace('-', '_')}"
@@ -248,11 +255,26 @@ class CredentialResolver:
         if legacy:
             return legacy
 
+        if self.config_dir is None:
+            return None
         credentials_file = self.config_dir / "credentials.json"
         if not credentials_file.exists():
             return None
         mode = credentials_file.stat().st_mode & 0o777
-        if os.name != "nt" and mode & 0o077:
+        if os.name == "nt":
+            from paperforge.compute.ssh import SSHSecurityError, _validate_windows_acl
+
+            try:
+                _validate_windows_acl(
+                    credentials_file,
+                    label="credential file",
+                    private=True,
+                )
+            except SSHSecurityError as exc:
+                raise ProviderConfigurationError(
+                    f"credential file permissions are unsafe: {credentials_file}"
+                ) from exc
+        elif mode & 0o077:
             raise ProviderConfigurationError(
                 f"credential file permissions must be 0600: {credentials_file}"
             )

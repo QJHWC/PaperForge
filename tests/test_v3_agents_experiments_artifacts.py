@@ -117,8 +117,9 @@ def test_artifact_store_restricts_paths_and_verifies_manifest(tmp_path: Path) ->
     assert manifest["artifacts"][0]["path"] == record.path
     assert store.verify_manifest(manifest)["verified"]
 
+    outside_absolute = tmp_path.parent / f"{tmp_path.name}-outside.json"
     with pytest.raises(ArtifactPathError):
-        store.write_json("/tmp/outside.json", {}, kind="metrics")
+        store.write_json(outside_absolute, {}, kind="metrics")
     with pytest.raises(ArtifactPathError):
         store.write_json("../outside.json", {}, kind="metrics")
     with pytest.raises(ArtifactNotAllowedError):

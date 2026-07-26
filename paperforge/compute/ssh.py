@@ -124,19 +124,43 @@ def _validate_windows_acl(path: Path, *, label: str, private: bool) -> None:
     )
     if powershell is None:
         raise SSHSecurityError(f"{label} Windows ACL cannot be verified")
+    environment_keys = {
+        "APPDATA",
+        "COMSPEC",
+        "HOME",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PSMODULEPATH",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "WINDIR",
+    }
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key.upper() in environment_keys
+    }
+    environment["PAPERFORGE_ACL_PATH"] = str(path)
     script = r"""
 $ErrorActionPreference = "Stop"
-$acl = Get-Acl -LiteralPath $args[0]
-$descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new(
-    $acl.GetSecurityDescriptorBinaryForm(),
-    0
+$target = [Environment]::GetEnvironmentVariable("PAPERFORGE_ACL_PATH")
+if ([String]::IsNullOrWhiteSpace($target)) {
+    throw "ACL target is unavailable"
+}
+$acl = Get-Acl -LiteralPath $target
+$sddl = $acl.GetSecurityDescriptorSddlForm(
+    [System.Security.AccessControl.AccessControlSections]::All
 )
+$descriptor = [System.Security.AccessControl.RawSecurityDescriptor]::new($sddl)
 $daclPresent = (
     $descriptor.ControlFlags -band
     [System.Security.AccessControl.ControlFlags]::DiscretionaryAclPresent
 ) -ne 0
 $current = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$owner = ([System.Security.Principal.NTAccount]$acl.Owner).Translate(
+$owner = $acl.GetOwner(
     [System.Security.Principal.SecurityIdentifier]
 ).Value
 $rules = @($acl.Access | ForEach-Object {
@@ -163,15 +187,17 @@ $rules = @($acl.Access | ForEach-Object {
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
             "-Command",
             script,
-            str(path),
         ],
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
         check=False,
+        env=environment,
     )
     if completed.returncode != 0:
         raise SSHSecurityError(f"{label} Windows ACL cannot be verified")

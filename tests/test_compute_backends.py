@@ -44,6 +44,10 @@ from paperforge.path_safety import UnsafePathError
 from paperforge.policy import ExecutionPolicy, PolicyViolation
 
 
+def _local_test_timeout(seconds: int = 5) -> int:
+    return 20 if os.name == "nt" else seconds
+
+
 def _secure_test_file(path: Path, *, mode: int) -> None:
     if os.name != "nt":
         path.chmod(mode)
@@ -530,7 +534,7 @@ def test_slurm_executable_attempt_does_not_modify_source_outputs(
     assert plan is not None
     wrapped = plan.argv[plan.argv.index("--wrap") + 1]
     assert str(source) not in wrapped
-    assert "/attempts/1/workspace:/workspace:ro" in wrapped
+    assert "/attempts/1/workspace:/workspace:ro" in wrapped.replace("\\", "/")
 
 
 def test_executable_docker_rejects_automatic_removal(tmp_path: Path) -> None:
@@ -810,7 +814,7 @@ def test_local_backend_executes_only_when_explicit_and_syncs_real_artifacts(
         execute=True,
     )
 
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + _local_test_timeout()
     current = result
     while current.status in {JobStatus.SUBMITTED, JobStatus.RUNNING}:
         assert time.monotonic() < deadline
@@ -852,7 +856,7 @@ def test_local_backend_recovers_completed_state_without_secret_environment(
         execute=True,
     )
     current = submitted
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + _local_test_timeout()
     while current.status in {JobStatus.SUBMITTED, JobStatus.RUNNING}:
         assert time.monotonic() < deadline
         time.sleep(0.02)
@@ -899,7 +903,7 @@ def test_local_backend_recovers_live_job_after_backend_restart(
 
     current = recovered_backend.status(submitted.job_id, execute=True)
     assert current.status is JobStatus.RUNNING
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + _local_test_timeout()
     while current.status is JobStatus.RUNNING:
         assert time.monotonic() < deadline
         time.sleep(0.02)
@@ -934,7 +938,7 @@ def test_local_backend_does_not_persist_or_inherit_host_credentials(
         ),
         execute=True,
     )
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + _local_test_timeout()
     current = submitted
     while current.status is JobStatus.RUNNING:
         assert time.monotonic() < deadline
@@ -973,7 +977,7 @@ def test_local_backend_sandbox_blocks_external_writes_and_redacts_raw_log(
         ),
         execute=True,
     )
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + _local_test_timeout()
     current = blocked
     while current.status in {JobStatus.SUBMITTED, JobStatus.RUNNING}:
         assert time.monotonic() < deadline
@@ -995,7 +999,7 @@ def test_local_backend_sandbox_blocks_external_writes_and_redacts_raw_log(
         ),
         execute=True,
     )
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + _local_test_timeout()
     current = redacted
     while current.status in {JobStatus.SUBMITTED, JobStatus.RUNNING}:
         assert time.monotonic() < deadline
@@ -1039,7 +1043,7 @@ def test_local_backend_sandbox_cannot_reach_host_loopback(
             execute=True,
         )
         current = submitted
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + _local_test_timeout()
         while current.status in {JobStatus.SUBMITTED, JobStatus.RUNNING}:
             assert time.monotonic() < deadline
             time.sleep(0.02)
@@ -1485,13 +1489,13 @@ def test_local_resume_uses_fresh_attempt_artifacts(tmp_path: Path) -> None:
             command=[sys.executable, "-c", code],
             workdir=workdir,
             outputs=["result.txt"],
-            resources=ResourceSpec(timeout_seconds=5),
+            resources=ResourceSpec(timeout_seconds=_local_test_timeout()),
             execute=True,
         )
     )
 
     current = submitted
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + _local_test_timeout()
     while current.status is JobStatus.RUNNING:
         assert time.monotonic() < deadline
         time.sleep(0.02)
@@ -1507,7 +1511,7 @@ def test_local_resume_uses_fresh_attempt_artifacts(tmp_path: Path) -> None:
 
     resumed = backend.resume(submitted.job_id, execute=True)
     current = resumed
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + _local_test_timeout()
     while current.status is JobStatus.RUNNING:
         assert time.monotonic() < deadline
         time.sleep(0.02)
