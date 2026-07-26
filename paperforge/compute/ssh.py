@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from engine.secret_redaction import redact_secrets
 from paperforge.policy import Action
 
 from ._artifacts import (
@@ -151,11 +152,7 @@ if ([String]::IsNullOrWhiteSpace($target)) {
     throw "ACL target is unavailable"
 }
 $acl = Get-Acl -LiteralPath $target
-$sections = (
-    [System.Security.AccessControl.AccessControlSections]::Access -bor
-    [System.Security.AccessControl.AccessControlSections]::Owner -bor
-    [System.Security.AccessControl.AccessControlSections]::Group
-)
+$sections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner -bor [System.Security.AccessControl.AccessControlSections]::Group
 $sddl = $acl.GetSecurityDescriptorSddlForm(
     $sections
 )
@@ -205,7 +202,11 @@ $rules = @($acl.Access | ForEach-Object {
         env=environment,
     )
     if completed.returncode != 0:
-        raise SSHSecurityError(f"{label} Windows ACL cannot be verified")
+        detail = redact_secrets(completed.stderr).replace(str(path), "<path>").strip()
+        suffix = f": {detail.splitlines()[0][:240]}" if detail else ""
+        raise SSHSecurityError(
+            f"{label} Windows ACL cannot be verified{suffix}"
+        )
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
