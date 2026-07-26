@@ -793,7 +793,8 @@ class LocalBackend(ComputeBackend):
     @staticmethod
     def _signal_supervisor(pid: int, *, force: bool) -> None:
         if os.name != "nt":
-            os.kill(pid, signal.SIGKILL if force else signal.SIGTERM)
+            force_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+            os.kill(pid, force_signal if force else signal.SIGTERM)
             return
         if force:
             subprocess.run(

@@ -48,6 +48,14 @@ _FORBIDDEN_EXTRA_ARGS = frozenset(
 )
 
 
+def _host_container_user() -> str:
+    getuid = vars(os).get("getuid")
+    getgid = vars(os).get("getgid")
+    if not callable(getuid) or not callable(getgid):
+        return "65532:65532"
+    return f"{getuid()}:{getgid()}"
+
+
 @dataclass(frozen=True)
 class DockerConfig:
     image: str
@@ -227,12 +235,7 @@ class DockerBackend(ComputeBackend):
             "--security-opt",
             "no-new-privileges",
             "--user",
-            self.config.container_user
-            or (
-                f"{os.getuid()}:{os.getgid()}"
-                if hasattr(os, "getuid")
-                else "65532:65532"
-            ),
+            self.config.container_user or _host_container_user(),
             "--pids-limit",
             "512",
             "--tmpfs",
