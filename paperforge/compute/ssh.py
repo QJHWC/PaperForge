@@ -58,6 +58,7 @@ _WINDOWS_TRUSTED_CONTROL_SIDS = frozenset(
         "S-1-5-32-544",
     }
 )
+_WINDOWS_OWNER_RIGHTS_SID = "S-1-3-4"
 _WINDOWS_WRITE_MASK = (
     0x10000000
     | 0x40000000
@@ -103,7 +104,8 @@ def _validate_windows_acl_payload(
             rights = int(item.get("rights", 0)) & 0xFFFFFFFF
         except (TypeError, ValueError) as exc:
             raise SSHSecurityError(f"{label} has an unreadable Windows ACL") from exc
-        if sid in trusted:
+        # OWNER RIGHTS maps to the owner already validated above.
+        if sid in trusted or sid == _WINDOWS_OWNER_RIGHTS_SID:
             continue
         effective = rights & ~_WINDOWS_SYNCHRONIZE
         if private and effective:

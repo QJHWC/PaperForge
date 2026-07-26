@@ -715,6 +715,54 @@ def test_windows_acl_allows_read_only_known_hosts_access() -> None:
 
 
 @pytest.mark.parametrize("private", [False, True])
+def test_windows_acl_allows_owner_rights_for_trusted_owner(private: bool) -> None:
+    payload = {
+        "dacl_present": True,
+        "dacl_null": False,
+        "current": "S-1-5-21-1000",
+        "owner": "S-1-5-21-1000",
+        "rules": [
+            {
+                "sid": "S-1-3-4",
+                "rights": 2032127,
+                "type": "Allow",
+                "propagation": "None",
+            }
+        ],
+    }
+
+    _validate_windows_acl_payload(
+        payload,
+        label="identity file" if private else "known_hosts",
+        private=private,
+    )
+
+
+def test_windows_acl_owner_rights_does_not_trust_an_untrusted_owner() -> None:
+    payload = {
+        "dacl_present": True,
+        "dacl_null": False,
+        "current": "S-1-5-21-1000",
+        "owner": "S-1-5-21-2000",
+        "rules": [
+            {
+                "sid": "S-1-3-4",
+                "rights": 2032127,
+                "type": "Allow",
+                "propagation": "None",
+            }
+        ],
+    }
+
+    with pytest.raises(SSHSecurityError, match="untrusted Windows owner"):
+        _validate_windows_acl_payload(
+            payload,
+            label="identity file",
+            private=True,
+        )
+
+
+@pytest.mark.parametrize("private", [False, True])
 def test_windows_acl_rejects_untrusted_writers(private: bool) -> None:
     payload = {
         "dacl_present": True,
