@@ -354,7 +354,8 @@ paperforge publish --help
 
 Research 工作流负责形成研究清单；Full 工作流必须另外绑定可验证的
 `paperforge.compute-job/v1` 清单。下面的最小示例只验证实验控制面和产物追踪，
-生成的 `.ok` 文件不是论文指标，也不能直接作为科研结论使用。
+前置阶段只输出检查日志，最终生成的 `full.ok` 也不是论文指标，不能直接作为
+科研结论使用。
 
 #### 准备阶段
 
@@ -383,10 +384,9 @@ Research 工作流负责形成研究清单；Full 工作流必须另外绑定可
            "command": [
              "python",
              "-c",
-             "from pathlib import Path; Path('static.ok').write_text('ok\\n', encoding='utf-8')"
+             "print('static check passed')"
            ],
            "workdir": ".",
-           "outputs": ["static.ok"],
            "resources": {
              "cpus": 1,
              "gpus": 0,
@@ -406,10 +406,9 @@ Research 工作流负责形成研究清单；Full 工作流必须另外绑定可
            "command": [
              "python",
              "-c",
-             "from pathlib import Path; Path('mini.ok').write_text('ok\\n', encoding='utf-8')"
+             "print('mini experiment passed')"
            ],
            "workdir": ".",
-           "outputs": ["mini.ok"],
            "resources": {
              "cpus": 1,
              "gpus": 0,
