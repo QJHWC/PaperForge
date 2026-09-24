@@ -14,10 +14,20 @@ from frontend.process_manager import ProcessManager
 def _wait_until(predicate, timeout: float = 5.0) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if predicate():
-            return
+        try:
+            if predicate():
+                return
+        except (IndexError, KeyError):
+            pass
         time.sleep(0.05)
     raise AssertionError("condition not met before timeout")
+
+
+def _records_with_status(manager: ProcessManager, workspace_rel: str) -> list:
+    try:
+        return manager.list_run_records(workspace_rel)
+    except Exception:
+        return []
 
 
 def test_launch_process_persists_log_and_metadata(tmp_path) -> None:
@@ -35,7 +45,12 @@ def test_launch_process_persists_log_and_metadata(tmp_path) -> None:
         details={"phase": "refine"},
     )
 
-    _wait_until(lambda: manager.list_run_records("paper_writer/demo")[0]["status"] in {"completed", "failed"})
+    _wait_until(
+        lambda: bool(
+            records := _records_with_status(manager, "paper_writer/demo"),
+        )
+        and records[0]["status"] in {"completed", "failed"}
+    )
     records = manager.list_run_records("paper_writer/demo")
     assert records
     record = records[0]
@@ -64,13 +79,19 @@ def test_pause_resume_stop_lifecycle(tmp_path) -> None:
         details={"phase": "refine"},
     )
 
-    _wait_until(lambda: Path(manager.list_run_records("paper_writer/demo")[0]["log_path"]).exists())
+    _wait_until(
+        lambda: bool(records := _records_with_status(manager, "paper_writer/demo"))
+        and Path(records[0].get("log_path", "")).exists()
+    )
     paused = manager.pause_run(result["run_id"])
     assert paused["status"] == "paused"
     resumed = manager.resume_run(result["run_id"])
     assert resumed["status"] == "running"
     manager.stop_run(result["run_id"])
-    _wait_until(lambda: manager.list_run_records("paper_writer/demo")[0]["status"] in {"failed", "completed"})
+    _wait_until(
+        lambda: bool(records := _records_with_status(manager, "paper_writer/demo"))
+        and records[0]["status"] in {"failed", "completed"}
+    )
 
 
 def test_start_run_builds_only_unified_cli_commands(tmp_path, monkeypatch) -> None:
