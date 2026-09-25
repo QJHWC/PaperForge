@@ -33,6 +33,46 @@ class ProviderCapabilities:
 
 
 @dataclass(frozen=True)
+class GenerationBudget:
+    """Typed output/context budget. UNKNOWN context_window is fail-safe (None).
+
+    4096 remains the output compatibility default; it must not be described
+    as the model context capability.
+    """
+
+    context_window: int | None = None
+    max_output_tokens: int = 4096
+    reserved_system_tokens: int = 512
+    reserved_response_tokens: int = 4096
+    safety_margin: int = 512
+    source_budget: int | None = None
+    reference_budget: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+# Trusted registry only. Unknown models resolve to UNKNOWN context_window
+# and must fail safe (callers refuse oversized prompts instead of assuming).
+_MODEL_BUDGETS: dict[str, GenerationBudget] = {
+    # Real context_window for bailu-turing is not confirmed from a trusted
+    # config; keep UNKNOWN and rely on explicit per-request budgets.
+    "bailu-turing": GenerationBudget(
+        context_window=None,
+        max_output_tokens=4096,
+        reserved_system_tokens=512,
+        reserved_response_tokens=4096,
+        safety_margin=512,
+    ),
+}
+
+
+def get_generation_budget(model: str) -> GenerationBudget:
+    """Return the typed budget for a model, UNKNOWN when unlisted."""
+    return _MODEL_BUDGETS.get(model, GenerationBudget())
+
+
+@dataclass(frozen=True)
 class ProviderConfig:
     provider: str
     protocol: str
@@ -41,6 +81,7 @@ class ProviderConfig:
     credential_alias: str
     capabilities: ProviderCapabilities = field(default_factory=ProviderCapabilities)
     max_tokens: int = 4096
+    generation_budget: GenerationBudget = field(default_factory=GenerationBudget)
 
     def public_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -308,6 +349,7 @@ class ProviderRegistry:
                     unsupported_request_fields=("reasoning_effort", "seed", "n", "stop"),
                 ),
                 max_tokens=4096,
+                generation_budget=get_generation_budget(model),
             )
 
         base_url = _unique_non_empty(
@@ -322,6 +364,7 @@ class ProviderRegistry:
             base_url=base_url,
             model=model,
             credential_alias=credential_alias,
+            generation_budget=get_generation_budget(model),
         )
 
     def credential(self, config: ProviderConfig) -> str | None:

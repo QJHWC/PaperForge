@@ -172,6 +172,59 @@ class RuntimeReport:
             for result in self.agent_results
         )
 
+    @staticmethod
+    def _operation_of(result: Mapping[str, Any]) -> str:
+        output = result.get("output")
+        if isinstance(output, Mapping):
+            return str(output.get("operation") or "")
+        return ""
+
+    @property
+    def inventory_completed_roles(self) -> tuple[str, ...]:
+        """Checklist outputs (inventory/snapshot), not substantive completion."""
+        return tuple(
+            str(result["role"])
+            for result in self.agent_results
+            if result["status"] == AgentResultStatus.COMPLETED.value
+            and self._operation_of(result)
+            in {
+                "evidence_inventory",
+                "source_inventory",
+                "claim_gate_snapshot",
+            }
+        )
+
+    @property
+    def substantive_completed_roles(self) -> tuple[str, ...]:
+        """Substantive completions excluding inventory and reviewer gate ops."""
+        excluded = {
+            "evidence_inventory",
+            "source_inventory",
+            "claim_gate_snapshot",
+            "evidence_review",
+            "release_prerequisites",
+        }
+        return tuple(
+            str(result["role"])
+            for result in self.agent_results
+            if result["status"] == AgentResultStatus.COMPLETED.value
+            and self._operation_of(result) not in excluded
+        )
+
+    @property
+    def scientific_review_state(self) -> str:
+        """Never report reviewer operation COMPLETED as scientifically verified."""
+        for result in self.agent_results:
+            if str(result.get("role")) != AgentRole.REVIEWER.value:
+                continue
+            output = result.get("output")
+            if isinstance(output, Mapping) and output.get("scientific_review_state"):
+                return str(output["scientific_review_state"])
+            if result["status"] == AgentResultStatus.COMPLETED.value:
+                return "needs_human_review"
+            return "blocked"
+        return "not_run"
+
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["completed_roles"] = list(self.completed_roles)
@@ -179,6 +232,13 @@ class RuntimeReport:
         payload["failed_roles"] = list(self.failed_roles)
         payload["skipped_roles"] = list(self.skipped_roles)
         payload["auth_blocked"] = self.auth_blocked
+        payload["inventory_completed_roles"] = list(self.inventory_completed_roles)
+        payload["substantive_completed_roles"] = list(self.substantive_completed_roles)
+        payload["scientific_review_state"] = self.scientific_review_state
+        payload["reviewer_display_hint"] = (
+            "Reviewer COMPLETED means the deterministic Claim Gate ran; "
+            "it does not mean scientifically verified. See scientific_review_state."
+        )
         return redact_structure(payload)
 
 
@@ -1051,12 +1111,29 @@ class ResearchOSRuntime:
             if gate["passed"]
             else AgentResultStatus.BLOCKED
         )
+        # U1修正3: operation COMPLETED only means the deterministic gate ran.
+        # Scientific verification always requires human review; the UI/API must
+        # read scientific_review_state, never completed_roles, for that.
         return AgentResult(
             request_id=request.request_id,
             role=request.role,
             status=status,
             output={
                 "operation": "evidence_review",
+                "operation_status": status.value.lower(),
+                "scientific_review_state": (
+                    "needs_human_review" if gate["passed"] else "blocked"
+                ),
+                "verification_state": (
+                    "claim_gate_passed_but_not_scientifically_reviewed"
+                    if gate["passed"]
+                    else "claim_gate_failed"
+                ),
+                "needs_human_review": True,
+                "display_hint": (
+                    "Reviewer COMPLETED means the Claim Gate ran; "
+                    "it is not scientific verification."
+                ),
                 "claim_gate": gate,
             },
         )
