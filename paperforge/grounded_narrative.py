@@ -36,6 +36,7 @@ _LAYER_ALLOWED = {
 
 _LAYER_FORBIDDEN = {
     "simulated": ("measured on device", "measured on raspberry", "physical hardware result",
+                  "physical device measurement",
                   "hardware validated", "on-device latency", "direct device measurement"),
     "remapped": ("physical device measurement", "direct device measurement", "hardware validated"),
     "measured": ("hardware validated", "robust", "generalizable", "production ready"),
