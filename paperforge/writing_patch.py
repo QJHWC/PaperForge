@@ -197,7 +197,9 @@ def apply_patch(
     )
     if len(prompt.encode("utf-8")) > 3 * 1024 * 1024:
         raise PatchSafetyError("patch request exceeds the 3 MiB context limit")
-    response = request_text(
+    from .provider import coerce_generation_result
+
+    raw_response = request_text(
         model,
         messages=[
             {"role": "system", "content": "You apply minimal LaTeX section patches exactly."},
@@ -207,7 +209,12 @@ def apply_patch(
         max_tokens=budget.max_output_tokens,
         temperature=0,
     )
-    replacement = _strip_fence(response).strip("\n")
+    generation = coerce_generation_result(raw_response)
+    if generation.truncated:
+        raise PatchSafetyError(
+            "GENERATION_TRUNCATED: provider reported length/truncation; refusing patch"
+        )
+    replacement = _strip_fence(generation.text).strip("\n")
     if not replacement:
         raise PatchSafetyError("patch model returned empty output; refusing to write")
     if _looks_truncated(replacement):

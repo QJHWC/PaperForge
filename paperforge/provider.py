@@ -469,7 +469,103 @@ def create_chat_completion(
     return client.chat.completions.create(**payload)
 
 
-def chat_completion_text(
+_TRUNCATION_REASONS = frozenset({"length", "truncated", "max_tokens", "output_limit"})
+
+
+@dataclass(frozen=True)
+class GenerationResult:
+    """Structured generation outcome. String API stays compatible via .text."""
+
+    text: str
+    finish_reason: str | None = None
+    stop_reason: str | None = None
+    output_tokens: int | None = None
+    truncated: bool = False
+    termination_unknown: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def coerce_generation_result(value: Any) -> GenerationResult:
+    """Wrap legacy string outputs as termination-unknown results."""
+    if isinstance(value, GenerationResult):
+        return value
+    if isinstance(value, str):
+        return GenerationResult(text=value.strip(), termination_unknown=True)
+    if isinstance(value, Mapping):
+        text = str(value.get("text") or value.get("content") or "").strip()
+        finish = value.get("finish_reason")
+        stop = value.get("stop_reason")
+        normalized_finish = str(finish).strip().lower() if finish is not None else None
+        normalized_stop = str(stop).strip().lower() if stop is not None else None
+        truncated = bool(
+            normalized_finish in _TRUNCATION_REASONS
+            or normalized_stop in _TRUNCATION_REASONS
+        )
+        unknown = normalized_finish is None and normalized_stop is None
+        output = value.get("output_tokens")
+        output_tokens = output if isinstance(output, int) and output >= 0 else None
+        return GenerationResult(
+            text=text,
+            finish_reason=normalized_finish,
+            stop_reason=normalized_stop,
+            output_tokens=output_tokens,
+            truncated=truncated,
+            termination_unknown=unknown,
+        )
+    raise TypeError(f"unsupported generation result type: {type(value).__name__}")
+
+
+def _parse_generation_response(response: Any) -> GenerationResult:
+    choices = getattr(response, "choices", None) or ()
+    first = choices[0] if choices else None
+    content = getattr(getattr(first, "message", None), "content", None)
+    # Some gateways use .text on the choice/message instead of .content.
+    if content is None and first is not None:
+        content = getattr(first, "text", None) or getattr(
+            getattr(first, "message", None), "text", None
+        )
+    text = content.strip() if isinstance(content, str) else ""
+    finish = getattr(first, "finish_reason", None) if first is not None else None
+    stop = getattr(first, "stop_reason", None) if first is not None else None
+    # OpenAI usage: response.usage.completion_tokens
+    usage = getattr(response, "usage", None)
+    output_tokens: int | None = None
+    for key in ("completion_tokens", "output_tokens", "generated_tokens"):
+        value = getattr(usage, key, None) if usage is not None else None
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int) and value >= 0:
+            output_tokens = value
+            break
+        if isinstance(value, float) and value.is_integer() and value >= 0:
+            output_tokens = int(value)
+            break
+    if isinstance(usage, Mapping):
+        for key in ("completion_tokens", "output_tokens"):
+            value = usage.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                output_tokens = value
+                break
+    normalized_finish = str(finish).strip().lower() if finish is not None else None
+    normalized_stop = str(stop).strip().lower() if stop is not None else None
+    truncated = bool(
+        (normalized_finish in _TRUNCATION_REASONS)
+        or (normalized_stop in _TRUNCATION_REASONS)
+    )
+    unknown = normalized_finish is None and normalized_stop is None
+    return GenerationResult(
+        text=text,
+        finish_reason=normalized_finish,
+        stop_reason=normalized_stop,
+        output_tokens=output_tokens,
+        truncated=truncated,
+        termination_unknown=unknown,
+    )
+
+
+def chat_completion_structured(
     model: str,
     *,
     messages: Any,
@@ -477,7 +573,7 @@ def chat_completion_text(
     registry: ProviderRegistry | None = None,
     client: Any | None = None,
     **parameters: Any,
-) -> str:
+) -> GenerationResult:
     """Execute one non-streaming request through the shared provider contract."""
 
     resolved_registry = registry or ProviderRegistry()
@@ -543,15 +639,30 @@ def chat_completion_text(
         raise ProviderRequestError(
             f"{type(exc).__name__}: {detail}"
         ) from exc
-    choices = getattr(response, "choices", None) or ()
-    content = (
-        getattr(getattr(choices[0], "message", None), "content", None)
-        if choices
-        else None
-    )
-    if not isinstance(content, str) or not content.strip():
+    parsed = _parse_generation_response(response)
+    if not parsed.text:
         raise ProviderRequestError("chat completion returned no message content")
-    return content.strip()
+    return parsed
+
+
+def chat_completion_text(
+    model: str,
+    *,
+    messages: Any,
+    stage: str = "writeup",
+    registry: ProviderRegistry | None = None,
+    client: Any | None = None,
+    **parameters: Any,
+) -> str:
+    """Legacy string API. Preserved for compatibility; prefers structured data."""
+    return chat_completion_structured(
+        model,
+        messages=messages,
+        stage=stage,
+        registry=registry,
+        client=client,
+        **parameters,
+    ).text
 
 
 def build_aider_model(

@@ -281,10 +281,12 @@ class WritingEngine:
         # Typed budget (U1修正2): 4096 is the output compatibility default,
         # not the model context capability. UNKNOWN context_window stays None
         # and fails safe via the hard limit above + explicit reference audit.
-        from .provider import get_generation_budget
+        # U1.5: provider termination metadata is the first verdict; the
+        # structural heuristic below is only the second insurance.
+        from .provider import coerce_generation_result, get_generation_budget
 
         budget = get_generation_budget(model)
-        response = self.request_text(
+        raw_response = self.request_text(
             model,
             messages=[
                 {
@@ -300,7 +302,15 @@ class WritingEngine:
             max_tokens=budget.max_output_tokens,
             temperature=0,
         )
-        candidate = _strip_fence(response)
+        generation = coerce_generation_result(raw_response)
+        if generation.truncated:
+            raise WritingSafetyError(
+                "GENERATION_TRUNCATED: provider reported length/truncation; "
+                "refusing to write even though the text may look complete"
+            )
+        candidate = _strip_fence(generation.text)
+        if not candidate.strip():
+            raise WritingSafetyError("generation returned no usable LaTeX")
         self._validate_candidate(
             candidate,
             protected_blocks=protected_blocks,
@@ -341,6 +351,7 @@ class WritingEngine:
                     "reference_truncated_any": reference_bundle.truncated_any,
                     "reference_needs_human_review_any": reference_bundle.needs_human_review_any,
                     "generation_budget": budget.to_dict(),
+                    "generation_termination": generation.to_dict(),
                 },
             )
         except BaseException:
