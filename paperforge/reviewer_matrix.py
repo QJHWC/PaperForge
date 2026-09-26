@@ -231,7 +231,16 @@ def _binding_current(workspace: Path, memory: Any, binding: EvidenceBinding) -> 
                 return True, "human verification present"
             return False, "human verification incomplete"
         if kind == "pdf_qa":
-            return False, "pdf QA arrives in U3B-2"
+            try:
+                from .pdf_qa import verify_pdf_qa
+
+                report = verify_pdf_qa(workspace, memory, ref)
+            except Exception as exc:
+                return False, f"pdf QA unavailable: {exc}"
+            if report.get("currently_valid") and report.get("layout_qa_state") in {
+                "passed", "passed_with_warnings"}:
+                return True, "pdf QA currently valid"
+            return False, f"pdf QA not passing: {report.get('layout_qa_state')}"
     except Exception as exc:
         return False, f"binding check failed: {exc}"
     return False, f"unknown binding kind: {kind}"
