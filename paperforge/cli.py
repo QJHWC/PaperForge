@@ -358,7 +358,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif args.command == "resume":
         _emit(service.resume(args.run_id).to_dict())
     elif args.command == "status":
-        _emit(service.status(args.run_id).to_dict())
+        _emit(service.unified_status(args.run_id))
     elif args.command == "publish":
         _emit(service.publish(template=args.template, main_tex=args.main_tex))
     elif args.command == "release":

@@ -480,11 +480,18 @@ def _workspace_v3_status(workspace: Path, workspace_rel: str) -> dict:
     artifact_previews = _artifact_previews(workspace, workspace_rel)
     claim_coverage = database_status["claim_coverage"]
     status = str((workflow or {}).get("status") or "READY")
+    try:
+        from paperforge.run_status import build_unified_status
+
+        unified = build_unified_status(workflow or {"id": "", "status": status}).to_dict() if workflow else None
+    except Exception:
+        unified = None
     return {
         "profile": profile,
         "available_profiles": ["writing-only", "research", "full"],
         "provider": _provider_status(workspace),
         "workflow": workflow,
+        "unified": unified,
         "approvals": database_status["approvals"],
         "claim_coverage": claim_coverage,
         "resume": {

@@ -108,6 +108,26 @@ function statusPill(status) {
   return `<span style="display:inline-flex;padding:4px 10px;border-radius:999px;background:${color}1a;color:${color};font-size:12px;font-weight:700">${htmlEscape(status || "unknown")}</span>`;
 }
 
+// Process supervision badge. Unambiguous names; legacy completed/failed map here
+// as deprecated process semantics. Never use for workflow/business truth.
+function processPill(status, exitCode) {
+  const normalized =
+    status === "completed" && exitCode === 0 ? "EXITED_SUCCESS"
+    : status === "completed" ? "EXITED_SUCCESS"
+    : status === "failed" ? "EXITED_FAILURE"
+    : status === "running" ? "RUNNING"
+    : status === "paused" ? "PAUSED"
+    : status === "stopping" ? "STOPPING"
+    : String(status || "UNKNOWN_NOT_ATTACHED").toUpperCase();
+  const color =
+    normalized === "RUNNING" ? "#b7791f"
+    : normalized === "PAUSED" ? "#1f5560"
+    : normalized === "EXITED_SUCCESS" ? "#2d6a4f"
+    : normalized === "EXITED_FAILURE" ? "#a12626"
+    : "#675d52";
+  return `<span title="process supervision only; not workflow truth" style="display:inline-flex;padding:4px 10px;border-radius:999px;background:${color}1a;color:${color};font-size:12px;font-weight:700">Process: ${htmlEscape(normalized)}</span>`;
+}
+
 async function fetchJSON(url) {
   const res = await fetch(url, { credentials: "same-origin", cache: "no-store" });
   const payload = await res.json().catch(() => ({}));
@@ -327,7 +347,7 @@ function renderRunList(frontendRuns) {
               <div style="font-weight:600">${htmlEscape(run.entry)} · ${htmlEscape(run.run_id)}</div>
               <div style="font-size:12px;color:#675d52;margin-top:4px">${timeAgo(run.started_at)}</div>
             </div>
-            <div>${statusPill(run.status)}</div>
+            <div>${processPill(run.status, run.exit_code)}</div>
           </div>
         </div>`;
     })
@@ -344,8 +364,11 @@ function renderV3Status(detail) {
   const providerConfig = provider.config || {};
   const releaseChecks = releaseGate.checks || {};
   const workflowStatus = detail.v3?.workflow?.status || detail.resume?.status || "READY";
+  const unifiedDiscrepancy = detail.v3?.unified?.process_discrepancy || "";
+  const unifiedPendingGate = detail.v3?.unified?.pending_human_gate || "";
   return `
     <div style="display:grid;gap:14px">
+      ${unifiedDiscrepancy ? `<div class="mini-item"><strong>State notice</strong><div class="sub" style="margin-top:6px">${htmlEscape(unifiedDiscrepancy)}${unifiedPendingGate ? ` · awaiting ${htmlEscape(unifiedPendingGate)}` : ""} (process supervision is not workflow truth)</div></div>` : ""}
       <div class="metrics">
         <div class="metric"><div class="label">Execution Profile</div><div class="value" style="font-size:20px">${htmlEscape(detail.profile || "full")}</div></div>
         <div class="metric"><div class="label">Workflow</div><div class="value" style="font-size:20px">${htmlEscape(workflowStatus)}</div></div>
