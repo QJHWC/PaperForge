@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .models import utc_now
+from .immutable_artifacts import register_immutable, verify_registered_bundle, write_immutable_bundle
 from .path_safety import atomic_write_text, reject_symlink_components, safe_mkdir
 
 REPORT_SCHEMA = "paperforge.release-eligibility-report/v1"
@@ -515,9 +516,13 @@ def evaluate_release(
                          if k not in {"matrix_id", "matrix_digest", "created_at", "matrix_file_sha256"}}
         comments_valid = all(c.get("comment_digest") == hashlib.sha256(c.get("exact_text", "").encode()).hexdigest()
                              for c in matrix.get("comments") or [])
+        matrix_registry = verify_registered_bundle(root, memory, {
+            f".paperforge/review_matrix/{matrix_id}/matrix.json": "review",
+            f".paperforge/review_matrix/{matrix_id}/manifest.json": "manifest"})
         # The legacy matrix verifier visits optional bindings and may reconcile.
         # Verify history here, then inspect only required bindings without repair.
-        if _digest(stable_matrix) != matrix.get("matrix_digest") or not comments_valid:
+        if (_digest(stable_matrix) != matrix.get("matrix_digest") or not comments_valid
+                or not matrix_registry["registered_complete"]):
             required_states = ["blocked"]
         else:
             required_ids = {c["criterion_id"] for c in matrix.get("criteria", []) if c.get("required")}
@@ -609,11 +614,11 @@ def evaluate_release(
             for bundle_id in pdf_bundle_ids:
                 bundle = _json_file(root, f".paperforge/pdf_qa/{_identifier(bundle_id)}/qa.json")
                 report = verify_pdf_qa(root, memory, str(bundle_id))
-                # U3B's verifier includes bundle_id in its digest recomputation,
-                # although the producer excludes it. Validate the producer contract here.
+                # Keep the producer's canonical contract and registry integrity
+                # separate: a complete file without registration is not current.
                 stable_qa = {k: v for k, v in bundle.items()
                              if k not in {"bundle_id", "qa_digest", "created_at", "qa_file_sha256"}}
-                if _digest(stable_qa) != bundle.get("qa_digest"):
+                if _digest(stable_qa) != bundle.get("qa_digest") or not report.get("registered_complete"):
                     problems.append(f"{bundle_id}: bundle invalid")
                     continue
                 if (bundle.get("target_pdf_sha256") != target.final_pdf_sha256
@@ -767,15 +772,15 @@ def freeze_assessment(workspace: str | Path, memory: Any, payload: Mapping[str, 
         if {k: v for k, v in previous.items() if k != "created_at"} != {
                 k: v for k, v in payload.items() if k != "created_at"}:
             raise ReleaseEligibilityError("frozen assessment collision")
-        return previous
-    for name, content in (
+        payload = previous
+    files = {
+        f".paperforge/release/{report_id}/{name}": content for name, content in (
         ("target.json", {"target": target.to_dict()}),
         ("report.json", payload),
         ("manifest.json", {"report_id": report_id, "report_digest": digest,
                            "target_id": target.target_id, "policy_digest": policy.digest()}),
-    ):
-        atomic_write_text(root, f".paperforge/release/{report_id}/{name}",
-                          json.dumps(content, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    )}
+    write_immutable_bundle(root, files)
     from .artifacts import ArtifactStore
 
     store = ArtifactStore(root, allowed_roots=(".paperforge/release",),
@@ -785,7 +790,7 @@ def freeze_assessment(workspace: str | Path, memory: Any, payload: Mapping[str, 
                 "policy_digest": policy.digest(), "overall_eligibility": payload["overall_eligibility"],
                 "note": "release assessment, not scientific evidence"}
     for name, kind in (("report.json", "release"), ("manifest.json", "manifest")):
-        store.register(f".paperforge/release/{report_id}/{name}", kind=kind,
+        register_immutable(store, f".paperforge/release/{report_id}/{name}", kind=kind,
                        status="VERIFIED", media_type="application/json", metadata=metadata)
     return dict(payload)
 
@@ -801,6 +806,9 @@ def assessment_current(workspace: str | Path, memory: Any, report_id: str, *,
     valid = (stored == _digest(stable) and report_id == f"release-{stored[:16]}"
              and payload.get("report_id") == report_id)
     current = False
+    registry = verify_registered_bundle(root, memory, {
+        f".paperforge/release/{report_id}/report.json": "release",
+        f".paperforge/release/{report_id}/manifest.json": "manifest"})
     if valid:
         try:
             policy = ReleasePolicy(**{k: v for k, v in payload["policy"].items() if k != "schema"})
@@ -813,7 +821,8 @@ def assessment_current(workspace: str | Path, memory: Any, report_id: str, *,
             current = False
     return {"report_id": report_id, "report_digest_valid": valid,
             "historical_integrity": "valid" if valid else "invalid",
-            "currently_valid": bool(valid and current),
+            **registry,
+            "currently_valid": bool(valid and current and registry["registered_complete"]),
             "overall_eligibility": payload.get("overall_eligibility")}
 
 

@@ -343,14 +343,13 @@ def freeze_review_matrix(
     matrix_dir = _safe_mkdir(root / ".paperforge" / "review_matrix" / matrix_id, anchor=root)
     payload = {**stable, "matrix_id": matrix_id, "matrix_digest": digest,
                "created_at": utc_now()}
-    for name, content in (("matrix.json", payload),
-                          ("manifest.json", {"matrix_id": matrix_id, "matrix_digest": digest})):
-        target = matrix_dir / name
-        tmp = target.with_name(f".{name}.tmp")
-        import json as _json
+    from .immutable_artifacts import register_immutable, write_immutable_bundle
 
-        tmp.write_text(_json.dumps(content, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        tmp.replace(target)
+    write_immutable_bundle(root, {
+        f".paperforge/review_matrix/{matrix_id}/matrix.json": payload,
+        f".paperforge/review_matrix/{matrix_id}/manifest.json": {"matrix_id": matrix_id, "matrix_digest": digest},
+    })
+    payload = json.loads((matrix_dir / "matrix.json").read_bytes())
     from .artifacts import ArtifactStore
 
     store = ArtifactStore(root, allowed_roots=(".paperforge/review_matrix",),
@@ -359,7 +358,7 @@ def freeze_review_matrix(
     metadata = {"matrix_id": matrix_id, "matrix_digest": digest, "workflow_id": run_id,
                 "comment_ids": sorted(c.reviewer_comment_id for c in comments)}
     for name, kind in (("matrix.json", "review"), ("manifest.json", "manifest")):
-        store.register(f".paperforge/review_matrix/{matrix_id}/{name}", kind=kind,
+        register_immutable(store, f".paperforge/review_matrix/{matrix_id}/{name}", kind=kind,
                        run_id=run_id, status="VERIFIED", media_type="application/json", metadata=metadata)
     return payload
 
@@ -409,12 +408,18 @@ def verify_review_matrix(workspace: str | Path, memory: Any, matrix_id: str) -> 
         referenced.update(str(c) for c in action.get("acceptance_criteria") or [])
     complete = required_ids.issubset(referenced)
     historical = "valid" if (digest_valid and comment_ok) else "invalid"
-    currently_valid = bool(historical == "valid" and not stale and complete)
+    from .immutable_artifacts import verify_registered_bundle
+
+    registry = verify_registered_bundle(root, memory, {
+        f".paperforge/review_matrix/{matrix_id}/matrix.json": "review",
+        f".paperforge/review_matrix/{matrix_id}/manifest.json": "manifest"})
+    currently_valid = bool(historical == "valid" and not stale and complete and registry["registered_complete"])
     # all_verified is separate from currently_valid.
     all_verified = bool(payload.get("actions") and all(
         str(a.get("status")) == "verified" for a in payload.get("actions", [])))
     return {
         "matrix_id": matrix_id,
+        **registry,
         "matrix_file_sha256": file_sha,
         "file_integrity": "valid",
         "digest_valid": digest_valid,

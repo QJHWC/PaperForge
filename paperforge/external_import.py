@@ -927,11 +927,22 @@ def materialize_import(
         )
     _validate_metric_provenance(semantics, metric, metric_provenance)
     key = _materialization_key(manifest_sha, report_sha, scope)
+    consistency = reconcile_imports(root, memory)
+    if not consistency["consistent"]:
+        # Do not recreate orphan Evidence or overwrite a damaged historical
+        # row while retrying an otherwise valid import.
+        raise ApprovalError("materialization integrity mismatch; manual reconciliation required")
     with memory.connect() as db:
         existing = db.execute(
             "SELECT * FROM import_materializations WHERE key=?", (key,)
         ).fetchone()
     if existing is not None:
+        consistency = reconcile_imports(root, memory)
+        if (key in consistency["orphan_materializations"]
+                or import_id in consistency["state_mismatches"]
+                or any(eid in consistency["orphan_evidence"]
+                       for eid in json.loads(existing["evidence_ids_json"]))):
+            raise ApprovalError("materialization integrity mismatch; manual reconciliation required")
         return {
             "import_id": import_id,
             "materialization_key": key,
@@ -1017,16 +1028,15 @@ def materialize_import(
 def reconcile_imports(workspace: str | Path, memory: Any, *, repair: bool = False) -> dict[str, Any]:
     """Detect orphan evidence/materializations and state mismatches.
 
-    Exception-injection rollback is tested in pytest; true SIGKILL/power-loss
-    safety comes from the single SQLite transaction above (WAL atomic commit).
-    This reconciler handles leftovers from older versions or manual file edits.
+    Unknown orphans are retained, not deleted or recreated. Reconciliation
+    never creates Evidence, changes claims, or issues an approval.
     """
     root = Path(workspace).expanduser().resolve(strict=True)
-    _ensure_u22_tables(memory)
     with memory.connect() as db:
-        materials = db.execute("SELECT * FROM import_materializations").fetchall()
-        evidence_rows = db.execute("SELECT id, metadata_json FROM evidence").fetchall()
-        imports = db.execute("SELECT * FROM imports").fetchall()
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        materials = db.execute("SELECT * FROM import_materializations").fetchall() if "import_materializations" in tables else []
+        evidence_rows = db.execute("SELECT * FROM evidence").fetchall()
+        imports = db.execute("SELECT * FROM imports").fetchall() if "imports" in tables else []
     materialized_keys = {str(r["key"]): r for r in materials}
     evidence_by_id = {str(r["id"]): r for r in evidence_rows}
     orphan_evidence: list[str] = []
@@ -1037,7 +1047,12 @@ def reconcile_imports(workspace: str | Path, memory: Any, *, repair: bool = Fals
             continue
         if not isinstance(meta, dict) or "materialization_key" not in meta:
             continue
-        if str(meta["materialization_key"]) not in materialized_keys:
+        material = materialized_keys.get(str(meta["materialization_key"]))
+        try:
+            referenced = json.loads(material["evidence_ids_json"]) if material else []
+        except (TypeError, ValueError):
+            referenced = []
+        if material is None or evidence_id not in referenced:
             orphan_evidence.append(evidence_id)
     orphan_materializations: list[str] = []
     for key, row in materialized_keys.items():
@@ -1045,8 +1060,33 @@ def reconcile_imports(workspace: str | Path, memory: Any, *, repair: bool = Fals
             evidence_ids = json.loads(str(row["evidence_ids_json"]))
         except (TypeError, ValueError):
             evidence_ids = []
-        if any(str(eid) not in evidence_by_id for eid in (evidence_ids or [])):
+        if (not isinstance(evidence_ids, list) or not evidence_ids
+                or any(not isinstance(eid, str) or not eid for eid in evidence_ids)
+                or len(evidence_ids) != len(set(evidence_ids))
+                or any(str(eid) not in evidence_by_id for eid in evidence_ids)
+                or not any(r["id"] == row["import_id"] for r in imports)):
             orphan_materializations.append(key)
+            continue
+        for eid in evidence_ids:
+            try:
+                evidence = evidence_by_id[eid]
+                meta = json.loads(evidence["metadata_json"])
+                manifest_path = root / ".paperforge/imports" / row["import_id"] / "manifest.json"
+                manifest, manifest_sha = _read_canonical_manifest(manifest_path)
+                source = next((s for s in manifest.get("sources", [])
+                               if s.get("path") == meta.get("source_relpath")), None)
+                if (meta.get("materialization_key") != key or meta.get("import_id") != row["import_id"]
+                        or evidence["content_sha256"] != hashlib.sha256(evidence["excerpt"].encode()).hexdigest()
+                        or meta.get("manifest_sha256") != row["manifest_sha256"] or manifest_sha != row["manifest_sha256"]
+                        or meta.get("validation_digest") != row["validation_report_sha256"]
+                        or meta.get("approval_scope") != row["approval_scope"]
+                        or _materialization_key(row["manifest_sha256"], row["validation_report_sha256"], row["approval_scope"]) != key
+                        or not source or meta.get("source_sha256") != source.get("sha256")):
+                    orphan_materializations.append(key)
+                    break
+            except (OSError, TypeError, ValueError, KeyError, AttributeError):
+                orphan_materializations.append(key)
+                break
     mismatches: list[str] = []
     for row in imports:
         import_id = str(row["id"])
@@ -1056,24 +1096,22 @@ def reconcile_imports(workspace: str | Path, memory: Any, *, repair: bool = Fals
             evidence_ids = json.loads(str(row["evidence_ids_json"] or "[]"))
         except (TypeError, ValueError):
             evidence_ids = []
-        if state == "materialized" and (not evidence_ids or not manifest_path.is_file()):
+        matching = [m for m in materials if m["import_id"] == import_id]
+        valid_match = (len(matching) == 1 and matching[0]["key"] not in orphan_materializations
+                       and json.loads(matching[0]["evidence_ids_json"]) == evidence_ids
+                       and manifest_path.is_file())
+        if (state == "materialized" and not valid_match) or (matching and state != "materialized"):
             mismatches.append(import_id)
     report = {
         "orphan_evidence": sorted(orphan_evidence),
         "orphan_materializations": sorted(orphan_materializations),
         "state_mismatches": sorted(mismatches),
         "consistent": not orphan_evidence and not orphan_materializations and not mismatches,
+        "recovery_outcome": "MANUAL_INTERVENTION_REQUIRED" if orphan_evidence or orphan_materializations or mismatches else "CLEAN",
+        "repaired": False,
     }
     if repair and not report["consistent"]:
-        with memory.connect() as db:
-            for evidence_id in orphan_evidence:
-                db.execute("DELETE FROM claim_evidence WHERE evidence_id=?", (evidence_id,))
-                db.execute("DELETE FROM evidence WHERE id=?", (evidence_id,))
-            for key in orphan_materializations:
-                db.execute("DELETE FROM import_materializations WHERE key=?", (key,))
-            for import_id in mismatches:
-                db.execute("UPDATE imports SET state='approved' WHERE id=?", (import_id,))
-        report["repaired"] = True
+        report["repair_refused"] = "ambiguous historical state retained; no Evidence or approval mutations"
     return report
 
 

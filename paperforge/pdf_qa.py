@@ -521,24 +521,16 @@ def run_pdf_qa(
     digest = hashlib.sha256(_canonical(stable)).hexdigest()
     bundle_id = f"qa-{digest[:16]}"
     bundle_dir = safe_mkdir(root / ".paperforge" / "pdf_qa" / bundle_id, anchor=root)
-    existing = bundle_dir / "qa.json"
-    if existing.is_file():
-        previous = json.loads(existing.read_bytes().decode("utf-8"))
-        if previous.get("qa_digest") == digest:
-            _register_qa_artifacts(root, memory, bundle_id, digest, actual_sha, policy.digest(), run_id=run_id)
-            return previous
-        raise PdfQaError(f"QA bundle collision: {bundle_id}")
+    from .immutable_artifacts import write_immutable_bundle
+
     payload = {**stable, "bundle_id": bundle_id, "qa_digest": digest, "created_at": utc_now()}
-    for name, content in (
+    write_immutable_bundle(root, {f".paperforge/pdf_qa/{bundle_id}/{name}": content for name, content in (
         ("spec.json", spec.to_canonical()),
         ("qa.json", payload),
         ("manifest.json", {"bundle_id": bundle_id, "qa_digest": digest,
                            "target_pdf_sha256": actual_sha, "policy_digest": policy.digest()}),
-    ):
-        target_path = bundle_dir / name
-        tmp = target_path.with_name(f".{name}.tmp")
-        tmp.write_text(json.dumps(content, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        tmp.replace(target_path)
+    )})
+    payload = json.loads((bundle_dir / "qa.json").read_bytes())
     _register_qa_artifacts(root, memory, bundle_id, digest, actual_sha, policy.digest(), run_id=run_id)
     return payload
 
@@ -546,6 +538,7 @@ def run_pdf_qa(
 def _register_qa_artifacts(root: Path, memory: Any, bundle_id: str, digest: str,
                            pdf_sha: str, policy_digest: str, run_id: str | None = None) -> None:
     from .artifacts import ArtifactStore
+    from .immutable_artifacts import register_immutable
 
     store = ArtifactStore(root, allowed_roots=(".paperforge/pdf_qa",),
                           allowed_suffixes=(".json",), allowed_kinds=("review", "manifest", "report"),
@@ -554,7 +547,7 @@ def _register_qa_artifacts(root: Path, memory: Any, bundle_id: str, digest: str,
                 "policy_digest": policy_digest, "workflow_id": run_id,
                 "note": "layout QA artifact, not scientific evidence"}
     for name, kind in (("qa.json", "review"), ("manifest.json", "manifest")):
-        store.register(f".paperforge/pdf_qa/{bundle_id}/{name}", kind=kind,
+        register_immutable(store, f".paperforge/pdf_qa/{bundle_id}/{name}", kind=kind,
                        run_id=run_id, status="VERIFIED", media_type="application/json", metadata=metadata)
 
 
@@ -572,7 +565,7 @@ def verify_pdf_qa(workspace: str | Path, memory: Any, bundle_id: str) -> dict[st
     except ValueError as exc:
         return {"bundle_id": bundle_id, "bundle_file_integrity": "failed", "detail": str(exc)}
     stored = str(payload.get("qa_digest") or "")
-    stable = {k: payload[k] for k in payload if k not in {"qa_digest", "created_at", "qa_file_sha256"}}
+    stable = {k: payload[k] for k in payload if k not in {"bundle_id", "qa_digest", "created_at", "qa_file_sha256"}}
     digest_valid = stored == hashlib.sha256(_canonical(stable)).hexdigest()
     # Target PDF still matches?
     target_match = True
@@ -584,8 +577,14 @@ def verify_pdf_qa(workspace: str | Path, memory: Any, bundle_id: str) -> dict[st
     # Human/render currentness sampled from stored hashes (no recomputation of renders here).
     unresolved_critical = list(payload.get("unresolved_critical") or [])
     state = str(payload.get("layout_qa_state") or "")
-    currently_valid = bool(historical == "valid")
+    from .immutable_artifacts import verify_registered_bundle
+
+    registry = verify_registered_bundle(root, memory, {
+        f".paperforge/pdf_qa/{bundle_id}/qa.json": "review",
+        f".paperforge/pdf_qa/{bundle_id}/manifest.json": "manifest"})
+    currently_valid = bool(historical == "valid" and registry["registered_complete"])
     return {
+        **registry,
         "bundle_id": bundle_id,
         "bundle_file_sha256": file_sha,
         "bundle_file_integrity": "valid",

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .models import utc_now
-from .path_safety import safe_mkdir
+from .path_safety import atomic_write_text, reject_symlink_components, safe_mkdir
 from .protected_blocks import (
     PROTECTED_END,
     PROTECTED_START,
@@ -132,6 +132,10 @@ def _sha256_str(text: str) -> str:
 
 
 def _resolve_target(root: Path, rel: str) -> Path:
+    relative = Path(rel)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ResultUpdateError("target leaves workspace")
+    reject_symlink_components(root / relative, anchor=root)
     candidate = (root / rel).resolve()
     try:
         candidate.relative_to(root)
@@ -465,6 +469,7 @@ def build_proposal(
         "schema": PROPOSAL_SCHEMA,
         "spec_digest": spec.digest(),
         "target_source_sha256": current_sha,
+        "expected_new_source_sha256": _sha256_str(candidate),
         "old_block_sha256": spec.old_block_sha256,
         "old_block": old_block,
         "proposed_block": proposed_block,
@@ -562,180 +567,227 @@ def approve_proposal(
              approved_at, json.dumps(sorted(acknowledged or [])), str(rationale or "")),
         )
         db.execute("UPDATE result_updates SET state='APPROVED' WHERE id=?", (proposal_id,))
-    (base / "approval.json").write_text(json.dumps({**binding, "acknowledged": sorted(acknowledged or []),
-                                                    "rationale": rationale}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic_write_text(root, f".paperforge/result_updates/{proposal_id}/approval.json",
+                      json.dumps({**binding, "approval_id": approval_id,
+                                  "acknowledged": sorted(acknowledged or []),
+                                  "rationale": rationale}, indent=2, sort_keys=True) + "\n")
     return {"approval_id": approval_id, "binding": binding}
+
+
+def _load_update(root: Path, memory: Any, proposal_id: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    if not re.fullmatch(r"prop-[a-f0-9]+", proposal_id):
+        raise ResultUpdateError("invalid proposal identity")
+    base = root / ".paperforge" / "result_updates" / proposal_id
+    for name in ("proposal.json", "spec.json", "validation.json"):
+        reject_symlink_components(base / name, anchor=root)
+    proposal = json.loads((base / "proposal.json").read_bytes())
+    spec = json.loads((base / "spec.json").read_bytes())
+    stable = {k: v for k, v in proposal.items()
+              if k not in {"proposal_id", "proposal_digest", "validation", "created_at"}}
+    digest = hashlib.sha256(_canonical(stable)).hexdigest()
+    with memory.connect() as db:
+        row = db.execute("SELECT * FROM result_updates WHERE id=?", (proposal_id,)).fetchone()
+    if (row is None or digest != proposal.get("proposal_digest")
+            or proposal.get("proposal_id") != proposal_id
+            or row["proposal_digest"] != digest
+            or json.loads(row["proposal_json"]) != proposal
+            or row["spec_digest"] != hashlib.sha256(_canonical(spec)).hexdigest()
+            or row["target_path"] != spec.get("target_path")):
+        raise ResultUpdateError("proposal/spec integrity mismatch")
+    return proposal, spec, dict(row)
+
+
+def _approval_for_recovery(root: Path, memory: Any, proposal: Mapping[str, Any]) -> dict[str, Any]:
+    base = root / ".paperforge" / "result_updates" / proposal["proposal_id"]
+    reject_symlink_components(base / "approval.json", anchor=root)
+    approval = json.loads((base / "approval.json").read_bytes())
+    validation = json.loads((base / "validation.json").read_bytes())
+    validation_digest = hashlib.sha256(_canonical(validation)).hexdigest()
+    with memory.connect() as db:
+        rows = db.execute(
+            "SELECT * FROM result_approvals WHERE proposal_id=? AND status='valid'",
+            (proposal["proposal_id"],),
+        ).fetchall()
+    matching = [r for r in rows if all((
+        not approval.get("approval_id") or approval["approval_id"] == r["id"],
+        approval.get("proposal_id") == proposal["proposal_id"],
+        r["proposal_digest"] == approval.get("proposal_digest") == proposal["proposal_digest"],
+        r["target_source_sha256"] == approval.get("target_source_sha256") == proposal["target_source_sha256"],
+        r["old_block_sha256"] == approval.get("old_block_sha256") == proposal["old_block_sha256"],
+        r["validation_digest"] == approval.get("validation_digest") == validation_digest,
+        r["approver"] == approval.get("approver"),
+        r["approved_at"] == approval.get("approved_at"),
+        r["scope"] == approval.get("approval_scope"),
+        r["rationale"] == approval.get("rationale", ""),
+        json.loads(r["acknowledged_json"]) == approval.get("acknowledged", []),
+    ))]
+    if len(matching) != 1 or approval.get("artifact_hashes", {}) != proposal.get("artifact_hashes", {}):
+        raise ResultUpdateApprovalError("approval absent, stale, or ambiguous")
+    _verify_ledger_bindings(root, memory, proposal.get("ledger_bindings") or [])
+    _verify_proposal_artifacts(root, memory, proposal, expected=approval.get("artifact_hashes"))
+    return {**approval, "approval_id": matching[0]["id"]}
+
+
+def _expected_new_hash(proposal: Mapping[str, Any], current_text: str) -> str:
+    expected = str(proposal.get("expected_new_source_sha256") or "")
+    if expected:
+        return expected
+    # Legacy proposals may be recovered only by reconstructing the exact
+    # approved old whole-file hash, never by recognizing the new block alone.
+    old, new = str(proposal["old_block"]), str(proposal["proposed_block"])
+    if _sha256_str(current_text) == proposal["target_source_sha256"]:
+        return _sha256_str(current_text.replace(old, new, 1))
+    if new and current_text.count(new) == 1:
+        restored = current_text.replace(new, old, 1)
+        if _sha256_str(restored) == proposal["target_source_sha256"]:
+            return _sha256_str(current_text)
+    raise ResultUpdateError("unknown whole-file state")
+
+
+def _finish_applied(root: Path, memory: Any, proposal: Mapping[str, Any],
+                    spec: Mapping[str, Any], approval: Mapping[str, Any], new_sha: str) -> dict[str, Any]:
+    applied_at = utc_now()
+    result = {
+        "proposal_id": proposal["proposal_id"], "old_source_sha256": proposal["target_source_sha256"],
+        "new_source_sha256": new_sha, "old_block_sha256": proposal["old_block_sha256"],
+        "new_block_sha256": _block_hash(str(proposal["proposed_block"])),
+        "approval_id": approval["approval_id"], "applied_at": applied_at,
+        "result_update_state": "applied", "scientific_review_state": "pending",
+        "publication_ready": False,
+    }
+    # Target already equals the authorized result. Recovery never writes it.
+    atomic_write_text(root, f".paperforge/result_updates/{proposal['proposal_id']}/applied.json",
+                      json.dumps(result, indent=2, sort_keys=True) + "\n")
+    with memory.connect() as db:
+        db.execute(
+            "INSERT OR REPLACE INTO result_baselines "
+            "(target_path, source_sha256, block_sha256, proposal_id, approval_id, applied_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (spec["target_path"], new_sha, result["new_block_sha256"],
+             proposal["proposal_id"], approval["approval_id"], applied_at),
+        )
+        db.execute("UPDATE result_updates SET state='APPLIED' WHERE id=?", (proposal["proposal_id"],))
+    return result
 
 
 def apply_proposal(workspace: str | Path, memory: Any, proposal_id: str) -> dict[str, Any]:
     root = Path(workspace).expanduser().resolve(strict=True)
-    base = root / ".paperforge" / "result_updates" / proposal_id
-    proposal = json.loads((base / "proposal.json").read_text(encoding="utf-8"))
-    approval_path = base / "approval.json"
-    if not approval_path.is_file():
-        raise ResultUpdateApprovalError("no approval for proposal")
-    approval = json.loads(approval_path.read_text(encoding="utf-8"))
-    _ensure_update_tables(memory)
+    proposal, spec, row = _load_update(root, memory, proposal_id)
+    approval = _approval_for_recovery(root, memory, proposal)
+    target = _resolve_target(root, spec["target_path"])
+    current_text = target.read_bytes().decode("utf-8")
+    current_sha = _sha256_str(current_text)
+    expected = _expected_new_hash(proposal, current_text)
+    if row["state"] == "APPLIED" and current_sha == expected:
+        report = reconcile_result_updates(root, memory)
+        finding = next(f for f in report["findings"] if f["proposal_id"] == proposal_id)
+        if finding["verdict"] != "CLEAN":
+            raise ResultUpdateError("applied record requires explicit reconciliation")
+        return json.loads((root / ".paperforge/result_updates" / proposal_id / "applied.json").read_bytes())
+    if row["state"] != "APPROVED":
+        raise ResultUpdateApprovalError("proposal is not APPROVED; reconcile incomplete operations explicitly")
+    if current_sha != approval["target_source_sha256"]:
+        raise ResultUpdateApprovalError("target changed after approval")
+    candidate = current_text.replace(proposal["old_block"], proposal["proposed_block"], 1)
+    if _sha256_str(candidate) != expected or proposal["proposed_block"] not in extract_protected_blocks(candidate):
+        raise ResultUpdateError("expected output binding mismatch")
     with memory.connect() as db:
-        db.execute("UPDATE result_updates SET state='APPLYING' WHERE id=?", (proposal_id,))
-    try:
-        spec_data = json.loads((base / "spec.json").read_text(encoding="utf-8"))
-        _verify_ledger_bindings(workspace, memory, proposal.get("ledger_bindings") or [])
-        _verify_proposal_artifacts(workspace, memory, proposal, expected=approval.get("artifact_hashes"))
-        target = _resolve_target(root, spec_data["target_path"])
-        current_text = target.read_text(encoding="utf-8")
-        if _sha256_str(current_text) != approval["target_source_sha256"]:
-            raise ResultUpdateApprovalError("target changed after approval")
-        if _sha256_str(current_text) != proposal["target_source_sha256"]:
-            raise ResultUpdateApprovalError("proposal stale: source changed")
-        blocks = extract_protected_blocks(current_text)
-        old_block = proposal["old_block"]
-        if old_block not in current_text:
-            raise ResultUpdateApprovalError("old block no longer present")
-        candidate = current_text.replace(old_block, proposal["proposed_block"], 1)
-        # Outside-block bytes must be identical.
-        if candidate.replace(proposal["proposed_block"], "") != current_text.replace(old_block, ""):
-            raise ResultUpdateApprovalError("scope violation: outside bytes changed")
-        tmp = target.with_name(f".{target.name}.{proposal_id}.tmp")
-        tmp.write_text(candidate, encoding="utf-8")
-        tmp.replace(target)
-        new_text = target.read_text(encoding="utf-8")
-        new_blocks = extract_protected_blocks(new_text)
-        if proposal["proposed_block"] not in new_blocks:
-            raise ResultUpdateError("apply verification failed")
-        new_source_sha = _sha256_str(new_text)
-        new_block_sha = _block_hash(proposal["proposed_block"])
-        # Idempotency: same proposal already applied (source equals expected new hash).
-        with memory.connect() as db:
-            db.execute(
-                "INSERT OR REPLACE INTO result_baselines (target_path, source_sha256, block_sha256,"
-                " proposal_id, approval_id, applied_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (spec_data["target_path"], new_source_sha, new_block_sha, proposal_id,
-                 approval.get("approval_id", ""), utc_now()),
-            )
-            db.execute("UPDATE result_updates SET state='APPLIED' WHERE id=?", (proposal_id,))
-        (base / "applied.json").write_text(json.dumps({
-            "proposal_id": proposal_id, "old_source_sha256": proposal["target_source_sha256"],
-            "new_source_sha256": new_source_sha, "old_block_sha256": proposal["old_block_sha256"],
-            "new_block_sha256": new_block_sha, "applied_at": utc_now(),
-            "result_update_state": "applied", "scientific_review_state": "pending",
-            "publication_ready": False,
-        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        return {"proposal_id": proposal_id, "new_source_sha256": new_source_sha,
-                "new_block_sha256": new_block_sha, "result_update_state": "applied",
-                "scientific_review_state": "pending", "publication_ready": False}
-    except BaseException as exc:
-        with memory.connect() as db:
-            try:
-                db.execute("UPDATE result_updates SET state='ROLLED_BACK' WHERE id=?", (proposal_id,))
-            except OSError:
-                pass
-        raise
+        changed = db.execute(
+            "UPDATE result_updates SET state='APPLYING' WHERE id=? AND state='APPROVED'", (proposal_id,)
+        ).rowcount
+        if changed != 1:
+            raise ResultUpdateError("concurrent result update state change")
+    # Any exception after APPLYING leaves a truthful incomplete operation.
+    # It must not claim ROLLED_BACK after the manuscript has been replaced.
+    if hashlib.sha256(target.read_bytes()).hexdigest() != current_sha:
+        raise ResultUpdateError("target changed immediately before replacement")
+    atomic_write_text(root, spec["target_path"], candidate)
+    if hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+        raise ResultUpdateError("apply verification failed")
+    return _finish_applied(root, memory, proposal, spec, approval, expected)
 
 
 def reconcile_result_updates(workspace: str | Path, memory: Any, *, repair: bool = False) -> dict[str, Any]:
-    """Crash-window matrix: CLEAN / RECOVERABLE_FORWARD / ROLLBACK / MANUAL.
+    """Classify exact crash states; repair audit/DB only, never target bytes.
 
-    A: APPROVED + target=old -> CLEAN (nothing applied yet).
-    B: APPLYING + target=old -> RECOVERABLE_ROLLBACK to APPROVED.
-    C: APPLYING + target=new -> RECOVERABLE_FORWARD (complete baseline/applied
-       records without touching target again) when bindings still valid.
-    D: APPLIED + target=new but applied.json/baseline missing -> FORWARD.
-    E/F: target neither old nor new, or bindings invalid -> MANUAL.
-    Exception-injection tests cover rollback; true power-loss proof stays U4.
+    Operators must quiesce writers before repair. Unknown, stale or unapproved
+    states are retained for manual intervention. No approval is created here.
     """
     root = Path(workspace).expanduser().resolve(strict=True)
-    _ensure_update_tables(memory)
-    findings: list[dict[str, Any]] = []
     with memory.connect() as db:
-        rows = db.execute("SELECT * FROM result_updates").fetchall()
-        for row in rows:
-            proposal_id = str(row["id"])
-            state = str(row["state"])
-            base = root / ".paperforge" / "result_updates" / proposal_id
-            try:
-                proposal = json.loads((base / "proposal.json").read_text(encoding="utf-8"))
-                spec_data = json.loads((base / "spec.json").read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                findings.append({"proposal_id": proposal_id, "verdict": "MANUAL_INTERVENTION_REQUIRED",
-                                 "reason": "proposal files unreadable"})
-                continue
-            try:
-                target = _resolve_target(root, str(spec_data.get("target_path")))
-                current_sha = _sha256_str(target.read_text(encoding="utf-8"))
-            except (OSError, ResultUpdateError):
-                findings.append({"proposal_id": proposal_id, "verdict": "MANUAL_INTERVENTION_REQUIRED",
-                                 "reason": "target unreadable"})
-                continue
-            old_sha, new_expected = str(proposal.get("target_source_sha256") or ""), None
-            try:
-                old_block, new_block = str(proposal.get("old_block") or ""), str(proposal.get("proposed_block") or "")
-                current_text = target.read_text(encoding="utf-8")
-                new_expected = _sha256_str(current_text.replace(old_block, new_block, 1)) if old_block in current_text else None
-                if old_block not in current_text and new_block in current_text:
-                    # Already applied: expected new hash is the current hash.
-                    new_expected = current_sha
-            except OSError:
-                new_expected = None
-            applied_path = base / "applied.json"
-            with memory.connect() as db2:
-                baseline = db2.execute("SELECT * FROM result_baselines WHERE proposal_id=?", (proposal_id,)).fetchone()
-            if state in {"APPROVED", "VALIDATED", "NEEDS_HUMAN"} and current_sha == old_sha:
-                findings.append({"proposal_id": proposal_id, "verdict": "CLEAN"})
-            elif state == "APPLYING" and current_sha == old_sha:
-                findings.append({"proposal_id": proposal_id, "verdict": "RECOVERABLE_ROLLBACK"})
-                if repair:
-                    with memory.connect() as db3:
-                        db3.execute("UPDATE result_updates SET state='APPROVED' WHERE id=?", (proposal_id,))
-            elif state == "APPLYING" and new_expected is not None and current_sha == new_expected:
-                # Forward only when bindings still hold; never rewrite target here.
-                try:
-                    _verify_ledger_bindings(workspace, memory, proposal.get("ledger_bindings") or [])
-                    _verify_proposal_artifacts(workspace, memory, proposal)
-                    verdict = "RECOVERABLE_FORWARD"
-                except ResultUpdateError as exc:
-                    verdict = f"MANUAL_INTERVENTION_REQUIRED: {exc}"
-                findings.append({"proposal_id": proposal_id, "verdict": verdict})
-                if repair and verdict == "RECOVERABLE_FORWARD":
-                    with memory.connect() as db3:
-                        db3.execute(
-                            "INSERT OR REPLACE INTO result_baselines (target_path, source_sha256, block_sha256,"
-                            " proposal_id, approval_id, applied_at) VALUES (?, ?, ?, ?, ?, ?)",
-                            (str(spec_data.get("target_path")), current_sha,
-                             _block_hash(new_block), proposal_id, "", utc_now()),
-                        )
-                        db3.execute("UPDATE result_updates SET state='APPLIED' WHERE id=?", (proposal_id,))
-                    (base / "applied.json").write_text(json.dumps({
-                        "proposal_id": proposal_id, "new_source_sha256": current_sha,
-                        "recovered_forward": True, "applied_at": utc_now(),
-                        "result_update_state": "applied"}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            elif state == "APPLIED":
-                if current_sha != old_sha and applied_path.is_file() and baseline is not None:
-                    # Check file wasn't hand-modified after apply.
-                    if new_expected is not None and current_sha == new_expected:
-                        findings.append({"proposal_id": proposal_id, "verdict": "CLEAN"})
-                    else:
-                        findings.append({"proposal_id": proposal_id, "verdict": "MANUAL_INTERVENTION_REQUIRED",
-                                         "reason": "applied target was hand-modified"})
-                elif not applied_path.is_file() or baseline is None:
-                    findings.append({"proposal_id": proposal_id, "verdict": "RECOVERABLE_FORWARD",
-                                     "reason": "applied record incomplete"})
-                    if repair:
-                        (base / "applied.json").write_text(json.dumps({
-                            "proposal_id": proposal_id, "recovered_forward": True,
-                            "applied_at": utc_now()}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-                        with memory.connect() as db3:
-                            db3.execute("UPDATE result_updates SET state='APPLIED' WHERE id=?", (proposal_id,))
-                else:
-                    findings.append({"proposal_id": proposal_id, "verdict": "MANUAL_INTERVENTION_REQUIRED",
-                                     "reason": "target neither old nor new"})
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='result_updates'").fetchone():
+            return {"findings": [], "mismatches": [], "consistent": True}
+        rows = db.execute("SELECT * FROM result_updates ORDER BY id").fetchall()
+    findings: list[dict[str, Any]] = []
+    for row in rows:
+        proposal_id, state = str(row["id"]), str(row["state"])
+        finding = {"proposal_id": proposal_id, "verdict": "MANUAL_INTERVENTION_REQUIRED"}
+        try:
+            proposal, spec, _ = _load_update(root, memory, proposal_id)
+            target = _resolve_target(root, spec["target_path"])
+            current_text = target.read_bytes().decode("utf-8")
+            current_sha = _sha256_str(current_text)
+            old_sha = proposal["target_source_sha256"]
+            expected = _expected_new_hash(proposal, current_text)
+            if state in {"VALIDATED", "NEEDS_HUMAN"} and current_sha == old_sha:
+                finding["verdict"] = "CLEAN"
             else:
-                findings.append({"proposal_id": proposal_id, "verdict": "MANUAL_INTERVENTION_REQUIRED",
-                                 "reason": f"state={state} with unexpected target hash"})
-    verdicts = {f["verdict"].split(":")[0] for f in findings}
-    clean = all(v == "CLEAN" for v in verdicts) if findings else True
-    return {"findings": findings, "mismatches": [f["proposal_id"] for f in findings if "CLEAN" not in f["verdict"]],
-            "consistent": clean}
+                approval = _approval_for_recovery(root, memory, proposal)
+                if state == "APPROVED" and current_sha == old_sha:
+                    finding["verdict"] = "CLEAN"
+                elif state == "APPLYING" and current_sha == old_sha:
+                    finding["verdict"] = "RECOVERABLE_ROLLBACK"
+                    if repair:
+                        with memory.connect() as db:
+                            db.execute("UPDATE result_updates SET state='APPROVED' WHERE id=? AND state='APPLYING'",
+                                       (proposal_id,))
+                elif state in {"APPLYING", "APPLIED"} and current_sha == expected:
+                    base = root / ".paperforge/result_updates" / proposal_id
+                    applied_path = base / "applied.json"
+                    reject_symlink_components(applied_path, anchor=root)
+                    applied = json.loads(applied_path.read_bytes()) if applied_path.is_file() else None
+                    with memory.connect() as db:
+                        baseline = db.execute("SELECT * FROM result_baselines WHERE target_path=?",
+                                              (spec["target_path"],)).fetchone()
+                    if applied is not None and any((
+                        applied.get("proposal_id") != proposal_id,
+                        applied.get("approval_id") != approval["approval_id"],
+                        applied.get("old_source_sha256") != proposal["target_source_sha256"],
+                        applied.get("old_block_sha256") != proposal["old_block_sha256"],
+                        applied.get("new_source_sha256") != expected,
+                        applied.get("new_block_sha256") != _block_hash(proposal["proposed_block"]),
+                        applied.get("result_update_state") != "applied",
+                        applied.get("scientific_review_state") != "pending",
+                        applied.get("publication_ready") is not False,
+                        not applied.get("applied_at"),
+                    )):
+                        raise ResultUpdateError("conflicting applied audit record")
+                    if baseline is not None and any((
+                        baseline["proposal_id"] != proposal_id,
+                        baseline["source_sha256"] != expected,
+                        baseline["block_sha256"] != _block_hash(proposal["proposed_block"]),
+                        baseline["approval_id"] != approval["approval_id"],
+                        applied is not None and baseline["applied_at"] != applied.get("applied_at"),
+                    )):
+                        raise ResultUpdateError("conflicting baseline; preserve for manual investigation")
+                    if state == "APPLIED" and applied is not None and baseline is not None:
+                        finding["verdict"] = "CLEAN"
+                    else:
+                        finding["verdict"] = "RECOVERABLE_FORWARD"
+                        if repair:
+                            # Recheck bytes immediately before completing technical records.
+                            if hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+                                raise ResultUpdateError("target changed during reconciliation")
+                            _finish_applied(root, memory, proposal, spec, approval, expected)
+                else:
+                    finding["reason"] = "target or operation state is not the approved old/new state"
+        except (OSError, ValueError, KeyError, TypeError, ResultUpdateError) as exc:
+            finding["verdict"] = "MANUAL_INTERVENTION_REQUIRED"
+            finding["reason"] = str(exc)
+        findings.append(finding)
+    return {"findings": findings,
+            "mismatches": [f["proposal_id"] for f in findings if f["verdict"] != "CLEAN"],
+            "consistent": all(f["verdict"] == "CLEAN" for f in findings)}
 
 
 __all__ = [

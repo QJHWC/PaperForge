@@ -301,8 +301,11 @@ def test_reconcile_detects_orphan(tmp_path: Path) -> None:
     report = reconcile_imports(tmp_path, service.memory, repair=False)
     assert out["evidence_ids"][0] in report["orphan_evidence"]
     repaired = reconcile_imports(tmp_path, service.memory, repair=True)
-    assert repaired.get("repaired") is True
-    assert reconcile_imports(tmp_path, service.memory)["consistent"] is True
+    assert repaired.get("repaired") is False
+    assert repaired["recovery_outcome"] == "MANUAL_INTERVENTION_REQUIRED"
+    with service.memory.connect() as db:
+        assert db.execute("SELECT 1 FROM evidence WHERE id=?", (out["evidence_ids"][0],)).fetchone()
+    assert reconcile_imports(tmp_path, service.memory)["consistent"] is False
 
 
 def test_subprocess_reopen_sees_committed_state(tmp_path: Path) -> None:

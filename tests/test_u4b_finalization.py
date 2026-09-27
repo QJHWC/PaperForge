@@ -236,6 +236,13 @@ def pdf_fixture(root, target, *, state="passed", warning_class="", pdf_sha=None)
     folder = root / ".paperforge/pdf_qa" / bundle_id
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "qa.json").write_text(json.dumps(payload))
+    (folder / "manifest.json").write_text(json.dumps({"bundle_id": bundle_id, "qa_digest": digest}))
+    from paperforge.artifacts import ArtifactStore
+
+    service = PaperForgeService(root)
+    store = ArtifactStore(root, allowed_roots=(".paperforge/pdf_qa",), memory=service.memory)
+    store.register(f".paperforge/pdf_qa/{bundle_id}/qa.json", kind="review")
+    store.register(f".paperforge/pdf_qa/{bundle_id}/manifest.json", kind="manifest")
     return bundle_id
 
 

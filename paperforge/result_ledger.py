@@ -12,7 +12,6 @@ from decimal import ROUND_HALF_EVEN, Context, localcontext
 from .evidence_semantics import EvidenceSemantics
 from .external_import import RUN_IDENTITY_SCHEMA, ScientificRunIdentity
 from .models import utc_now
-from .path_safety import safe_mkdir
 
 LEDGER_SCHEMA = "paperforge.result-ledger/v1"
 QUERY_SCHEMA = "paperforge.result-ledger-query/v1"
@@ -553,56 +552,25 @@ def freeze_ledger(
     }
     digest = hashlib.sha256(_canonical_json(stable)).hexdigest()
     ledger_id = f"ledger-{digest[:16]}"
-    ledger_dir = safe_mkdir(root / ".paperforge" / "ledgers" / ledger_id, anchor=root)
-    # Idempotent: same digest exists and verifies → return it (no rewrite).
-    ledger_path = ledger_dir / "ledger.json"
-    if ledger_path.is_file():
-        try:
-            existing = json.loads(ledger_path.read_bytes().decode("utf-8"))
-        except ValueError as exc:
-            raise LedgerError(f"existing ledger is not valid JSON: {exc}") from exc
-        if existing.get("ledger_digest") == digest:
-            _register_ledger_artifacts(
-                root, memory, ledger_id, digest, query_digest, existing, run_id=run_id
-            )
-            return existing
-        raise LedgerError(f"ledger_id collision with different content: {ledger_id}")
+    from .immutable_artifacts import write_immutable_bundle
+
     payload: dict[str, Any] = {
-        **stable,
-        "ledger_id": ledger_id,
-        "ledger_digest": digest,
-        "created_at": utc_now(),
+        **stable, "ledger_id": ledger_id, "ledger_digest": digest, "created_at": utc_now(),
         "diagnostic_marking": (
-            "NOT PUBLICATION EVIDENCE" if query.purpose == "diagnostic" else "scientific snapshot; not claim verified"
+            "NOT PUBLICATION EVIDENCE" if query.purpose == "diagnostic"
+            else "scientific snapshot; not claim verified"
         ),
     }
-    written: list[Path] = []
-    try:
-        for name, content in (
-            ("query.json", {"query": query.to_canonical(), "query_digest": query_digest}),
-            ("ledger.json", payload),
-            ("manifest.json", {
-                "ledger_id": ledger_id, "ledger_digest": digest,
-                "generator_version": GENERATOR_VERSION,
-                "decimal_aggregation_version": DECIMAL_AGGREGATION_VERSION,
-                "query_digest": query_digest,
-            }),
-        ):
-            target = ledger_dir / name
-            tmp = target.with_name(f".{name}.{ledger_id}.tmp")
-            tmp.write_text(json.dumps(content, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            tmp.replace(target)
-            written.append(target)
-        _register_ledger_artifacts(
-            root, memory, ledger_id, digest, query_digest, payload, run_id=run_id
-        )
-    except BaseException:
-        # No partial authority: files without registry (or vice versa) must not stand.
-        try:
-            _unregister_ledger_artifacts(root, memory, ledger_id)
-        except (OSError, ValueError):
-            pass
-        raise
+    write_immutable_bundle(root, {
+        f".paperforge/ledgers/{ledger_id}/query.json": {"query": query.to_canonical(), "query_digest": query_digest},
+        f".paperforge/ledgers/{ledger_id}/ledger.json": payload,
+        f".paperforge/ledgers/{ledger_id}/manifest.json": {
+            "ledger_id": ledger_id, "ledger_digest": digest, "generator_version": GENERATOR_VERSION,
+            "decimal_aggregation_version": DECIMAL_AGGREGATION_VERSION, "query_digest": query_digest,
+        },
+    })
+    payload = json.loads((root / ".paperforge/ledgers" / ledger_id / "ledger.json").read_bytes())
+    _register_ledger_artifacts(root, memory, ledger_id, digest, query_digest, payload, run_id=run_id)
     return payload
 
 
@@ -647,19 +615,21 @@ def _register_ledger_artifacts(
         allowed_kinds=("result", "manifest", "report"),
         memory=memory,
     )
+    from .immutable_artifacts import register_immutable
+
     records = [
-        store.register(
+        register_immutable(store,
             f".paperforge/ledgers/{ledger_id}/ledger.json",
             kind="result", run_id=run_id, status="VERIFIED",
             media_type="application/json", metadata=metadata,
-        ).to_dict(),
-        store.register(
+        ),
+        register_immutable(store,
             f".paperforge/ledgers/{ledger_id}/manifest.json",
             kind="manifest", run_id=run_id, status="VERIFIED",
             media_type="application/json", metadata=metadata,
-        ).to_dict(),
+        ),
     ]
-    return records
+    return [r if isinstance(r, dict) else r.to_dict() for r in records]
 
 
 def _unregister_ledger_artifacts(root: Path, memory: Any, ledger_id: str) -> None:
@@ -764,9 +734,16 @@ def verify_ledger(workspace: str | Path, memory: Any, ledger_id: str) -> dict[st
                 semantics_ok = False
     historical = "valid" if (digest_valid and snapshot_ok) else "invalid"
     currentness = "current" if not stale else "stale"
-    eligible = bool(historical == "valid" and currentness == "current" and semantics_ok)
+    from .immutable_artifacts import verify_registered_bundle
+
+    registry = verify_registered_bundle(root, memory, {
+        f".paperforge/ledgers/{ledger_id}/ledger.json": "result",
+        f".paperforge/ledgers/{ledger_id}/manifest.json": "manifest"})
+    eligible = bool(historical == "valid" and currentness == "current" and semantics_ok
+                    and registry["registered_complete"])
     return {
         "ledger_id": ledger_id,
+        **registry,
         "ledger_file_sha256": file_sha,
         "ledger_file_integrity": "valid" if ledger_path.is_file() else "failed",
         "ledger_digest_valid": digest_valid,

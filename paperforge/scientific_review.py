@@ -591,17 +591,14 @@ def freeze_review(
     review_dir = _safe_mkdir(root / ".paperforge" / "reviews" / review_id, anchor=root)
     payload = {**stable, "review_id": review_id, "review_digest": digest,
                "created_at": __import__("paperforge.models", fromlist=["utc_now"]).utc_now()}
-    for name, content in (
+    from .immutable_artifacts import register_immutable, write_immutable_bundle
+
+    write_immutable_bundle(root, {f".paperforge/reviews/{review_id}/{name}": content for name, content in (
         ("review.json", payload),
         ("manifest.json", {"review_id": review_id, "review_digest": digest,
                            "checker_version": CHECKER_VERSION, "rule_pack_digest": rule_digest}),
-    ):
-        target = review_dir / name
-        tmp = target.with_name(f".{name}.tmp")
-        import json as _json
-
-        tmp.write_text(_json.dumps(content, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        tmp.replace(target)
+    )})
+    payload = json.loads((review_dir / "review.json").read_bytes())
     # Register as review/audit artifact, never as scientific Evidence.
     from .artifacts import ArtifactStore
 
@@ -612,7 +609,7 @@ def freeze_review(
                 "checker_version": CHECKER_VERSION, "rule_pack_digest": rule_digest,
                 "claim_ids": sorted(c.claim_id for c in claims), "workflow_id": run_id}
     for name, kind in (("review.json", "review"), ("manifest.json", "manifest")):
-        store.register(f".paperforge/reviews/{review_id}/{name}", kind=kind,
+        register_immutable(store, f".paperforge/reviews/{review_id}/{name}", kind=kind,
                        run_id=run_id, status="VERIFIED",
                        media_type="application/json", metadata=metadata)
     return payload
@@ -661,7 +658,13 @@ def verify_scientific_review(workspace: str | Path, memory: Any, review_id: str)
     checker_match = str(payload.get("checker_version") or "") == CHECKER_VERSION and checker_match
     historical = "valid" if digest_valid else "invalid"
     current = "current" if digest_valid and not stale and rule_match and checker_match else "stale"
+    from .immutable_artifacts import verify_registered_bundle
+
+    registry = verify_registered_bundle(root, memory, {
+        f".paperforge/reviews/{review_id}/review.json": "review",
+        f".paperforge/reviews/{review_id}/manifest.json": "manifest"})
     return {
+        **registry,
         "review_id": review_id,
         "review_file_sha256": file_sha,
         "review_file_integrity": "valid",
@@ -674,7 +677,8 @@ def verify_scientific_review(workspace: str | Path, memory: Any, review_id: str)
         "checker_version_match": checker_match,
         "historical_integrity": historical,
         "source_currentness": current,
-        "currently_valid_as_review_input": bool(historical == "valid" and current == "current"),
+        "currently_valid_as_review_input": bool(historical == "valid" and current == "current"
+                                                and registry["registered_complete"]),
         "warnings": [] if historical == "valid" else ["review file or digest mismatch"],
     }
 
