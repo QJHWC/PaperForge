@@ -67,6 +67,7 @@ class UnifiedRunStatus:
     updated_at: str = ""
     # Deprecated compat: mirrors workflow_state, never process state.
     status: str = ""
+    release_assessment: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.process_state not in PROCESS_STATES:
@@ -144,6 +145,8 @@ def _classify_relation(workflow_state: str, process_state: str) -> tuple[str, st
 def build_unified_status(
     workflow_state: Mapping[str, Any],
     process_payload: Mapping[str, Any] | None = None,
+    *,
+    release_assessment: Mapping[str, Any] | None = None,
 ) -> UnifiedRunStatus:
     """Build the shared projection. Read-only: never writes domain or process state."""
     run_id = str(workflow_state.get("id") or "")
@@ -177,6 +180,12 @@ def build_unified_status(
         review_ids=(),
         updated_at=str(workflow_state.get("updated_at") or ""),
         status=state,
+        release_assessment={
+            **{key: release_assessment[key] for key in (
+                "report_id", "overall_eligibility", "currently_valid", "authorization_state", "release_state"
+            ) if key in release_assessment},
+            "authoritative": False,
+        } if release_assessment else {},
     )
 
 
