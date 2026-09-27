@@ -303,8 +303,14 @@ def render_pages(data: bytes, *, dpi: int = 200, renderer: str = "primary",
                  backend: RenderBackend | None = None,
                  allow_synthetic: bool = False) -> list[dict[str, Any]]:
     """Render every page to real raster bytes (default) or explicit fixture mode."""
-    text = data.decode("latin-1", errors="ignore")
-    count = max(1, len(re.findall(r"/Type\s*/Page(?!s)", text)))
+    try:
+        from pypdf import PdfReader as _PdfReader
+        import io as _io
+
+        count = max(1, len(_PdfReader(_io.BytesIO(data)).pages))
+    except Exception:
+        text = data.decode("latin-1", errors="ignore")
+        count = max(1, len(re.findall(r"/Type\s*/Page(?!s)", text)))
     if b"RENDER_FAIL" in data:
         raise PdfQaError("render failure (fixture marker)")
     active = backend or _default_backend("synthetic" if renderer == "synthetic" else "")
