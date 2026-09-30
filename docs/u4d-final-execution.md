@@ -105,3 +105,28 @@ The earlier U4C/U4D-Prep reports are historical evidence, not current gate resul
   Ruff PASS; configured mypy PASS (80 source files). No assertion was weakened.
 - Commit `58783af` contains the earlier isolated-environment/static gate repairs;
   this security repair is committed separately.
+
+## Import-to-ledger and integration checkpoint
+
+- Publication path repair commit: `fae3b9c`.
+- Real integration defect confirmed red-first: approved/materialized metric JSON
+  produced an empty ledger because the registered adapters were never invoked.
+  Adapter extraction now runs from exact approved source bytes with manifest
+  identity/semantics, integrity checks and source-locator/hash provenance. It does
+  not mint or rewrite Evidence and does not parse manuscript numbers.
+- Independent review found and closed two binding gaps before commit: mutable
+  Evidence semantics cannot override the approved manifest; currentness cannot
+  bypass original import binding by deleting/changing current metadata. Recomputed
+  observation digests detect tampering while frozen history remains unchanged.
+- Sixteen import-path tests and one end-to-end integration smoke pass. Old U23
+  test fixture now uses actual materialized source Evidence instead of a fabricated
+  orphan metric row; all original integrity/currentness assertions are retained.
+- [FinalSmokeReport](u4d-final-smoke.md): real adapter-to-status pipeline, real
+  PyMuPDF fixture build/Poppler render, missing human gates and release refusal.
+  Combined with all U4C reliability tests: **86 passed**.
+- Full regression: **752 collected, 747 passed, 5 skipped, 0 failed, 0 errors**;
+  Ruff PASS; mypy PASS (80 files). Five SWIG warnings remain visible.
+- Broader A9 review is still in progress. It has reproduced another pre-existing
+  fixed-temp symlink overwrite in ResultUpdate proposal/spec/validation writes.
+  This is a push blocker and is next to repair. Remote review and paper revision
+  have not started; the overall goal remains active.

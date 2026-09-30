@@ -282,7 +282,7 @@ def test_conflict_fail_and_explicit_max(tmp_path: Path) -> None:
 def test_verify_file_tamper_and_stale(tmp_path: Path) -> None:
     service = _service(tmp_path)
     src = tmp_path / "imp.json"
-    src.write_text('{"latency_ms": 22.4}\n', encoding="utf-8")
+    src.write_text('{"schema":"paperforge.metric-json/v1","metric":"latency_ms","value":"22.400","unit":"ms"}\n', encoding="utf-8")
     record = stage_import(
         tmp_path, service.memory,
         semantics=EvidenceSemantics.from_metadata({"measurement_kind": "measured", "acquisition_origin": "external_import", "environment_role": "scientific"}),
@@ -292,17 +292,11 @@ def test_verify_file_tamper_and_stale(tmp_path: Path) -> None:
     report = validate_import(tmp_path, service.memory, record.import_id)
     ack = [c["check_id"] for c in report["checks"] if c["status"] == "needs_human"]
     approve_import(tmp_path, service.memory, record.import_id, approver="local-owner", acknowledged_checks=ack, rationale="ok")
-    # Metric evidence linked to the import for currentness tracking.
+    # Use actual materialized source Evidence, not a fabricated extra metric row.
     from paperforge.external_import import materialize_import as _mat
 
     out = _mat(tmp_path, service.memory, record.import_id)
-    metric_id = service.memory.add_evidence(
-        evidence_type="EXTERNAL_MEASUREMENT", excerpt="latency 22.4 ms",
-        path="metrics/lat.txt", config_scope="test",
-        metadata={"measurement_kind": "measured", "acquisition_origin": "external_import", "environment_role": "scientific",
-                  "metric_name": "latency_ms", "value_str": "22.400", "unit": "ms",
-                  "import_id": record.import_id, "materialization_key": out["materialization_key"],
-                  "run_identity": {"schema": "paperforge.scientific-run-identity/v1", "model_id": "m"}})
+    metric_id = out["evidence_ids"][0]
     ledger = freeze_ledger(tmp_path, service.memory, _q(metric_names=["latency_ms"]))
     ok = verify_ledger(tmp_path, service.memory, ledger["ledger_id"])
     assert ok["historical_integrity"] == "valid"  # 23 part

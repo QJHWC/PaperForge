@@ -350,6 +350,89 @@ def _apply_unit_conversions(
     return output
 
 
+def _imported_metric_snapshots(
+    root: Path, memory: Any, evidence_id: str, row: Mapping[str, Any],
+    metadata: Mapping[str, Any], query: ResultLedgerQuery,
+) -> list[dict[str, Any]]:
+    from .external_import import _validate_metric_provenance, approval_valid, reconcile_imports
+    from .metric_adapters import MetricExtractorRegistry
+    from .metric_observation import AdapterContext, UnsupportedMetricSource
+    from .path_safety import reject_symlink_components
+
+    import_id = str(metadata.get("import_id") or "")
+    if not import_id or import_id in {".", ".."} or any(c in import_id for c in "/\\:"):
+        raise LedgerError("invalid import identity")
+    valid, reason = approval_valid(root, memory, import_id)
+    if not valid:
+        raise LedgerError(f"import approval is not current: {reason}")
+    if not reconcile_imports(root, memory)["consistent"]:
+        raise LedgerError("import materialization integrity mismatch")
+    base = root / ".paperforge" / "imports" / import_id
+    manifest_path = reject_symlink_components(base / "manifest.json", anchor=root)
+    manifest = json.loads(manifest_path.read_bytes())
+    source_relative = Path(str(metadata.get("source_relpath") or ""))
+    if (source_relative.is_absolute() or len(source_relative.parts) != 2
+            or source_relative.parts[0] != "sources"
+            or any(p in {".", ".."} for p in source_relative.parts)
+            or "\\" in str(source_relative)):
+        raise LedgerError("invalid imported metric source path")
+    source = reject_symlink_components(base / source_relative, anchor=root)
+    source_bytes = source.read_bytes()
+    if hashlib.sha256(source_bytes).hexdigest() != metadata.get("source_sha256"):
+        raise LedgerError("imported metric source integrity mismatch")
+    semantics = EvidenceSemantics.from_metadata(dict(manifest.get("semantics") or {}))
+    if EvidenceSemantics.from_metadata(metadata) != semantics:
+        raise LedgerError("Evidence differs from approved semantics")
+    execution = dict(manifest.get("execution") or {})
+    metric_provenance = dict(execution.get("metric_provenance") or {})
+    context = AdapterContext(
+        evidence_id=evidence_id,
+        run_identity=ScientificRunIdentity.from_manifest(manifest).to_dict(),
+        measurement_kind=semantics.measurement_kind,
+        acquisition_origin=semantics.acquisition_origin,
+        environment_role=semantics.environment_role,
+        acquisition_method=str(semantics.derivation_method or metric_provenance.get("acquisition_method") or ""),
+        method_version=str(semantics.derivation_version or metric_provenance.get("method_version") or ""),
+        parent_evidence_ids=semantics.parent_evidence_ids,
+        source_artifact_id=import_id,
+        source_file_hash=str(metadata.get("source_sha256") or ""),
+    )
+    try:
+        observations = MetricExtractorRegistry().extract(
+            source_bytes, source_relative.as_posix(), context)
+    except UnsupportedMetricSource as exc:
+        # An explicitly selected source must never disappear into an empty ledger.
+        # Broad selection can include non-metric documents alongside metric logs.
+        from .metric_adapters import SemanticsMismatchError
+
+        if isinstance(exc, SemanticsMismatchError) or evidence_id in query.evidence_ids:
+            raise
+        return []
+    snapshots = []
+    for observation in observations:
+        _validate_metric_provenance(semantics, observation.metric_name, metric_provenance)
+        normalized = {
+            **metadata, "metric_name": observation.metric_name,
+            "value_str": observation.source_lexical_value, "unit": observation.unit,
+            "run_identity": dict(observation.run_identity),
+        }
+        snapshot = _snapshot_evidence(
+            evidence_id, {**row, "metadata_json": json.dumps(normalized)}, query=query)
+        if snapshot is None:
+            continue
+        snapshot.update({
+            "adapter_id": observation.adapter_id,
+            "adapter_version": observation.adapter_version,
+            "source_file_hash": observation.source_file_hash,
+            "source_locator": observation.to_dict()["source_locator"],
+        })
+        body = {k: v for k, v in snapshot.items()
+                if k not in {"evidence_snapshot_digest", "source_lexical_value", "source_decimal_places"}}
+        snapshot["evidence_snapshot_digest"] = hashlib.sha256(_canonical_json(body)).hexdigest()
+        snapshots.append(snapshot)
+    return snapshots
+
+
 def _aggregate(
     snapshots: list[dict[str, Any]], spec: AggregationSpec, *, purpose: str = "scientific"
 ) -> list[dict[str, Any]]:
@@ -471,7 +554,15 @@ def freeze_ledger(
         evidence_map = {str(r["id"]): r for r in _load_evidence_rows(memory) if r.get("id")}
     snapshots: list[dict[str, Any]] = []
     for evidence_id in sorted(evidence_map):
-        snap = _snapshot_evidence(evidence_id, evidence_map[evidence_id], query=query)
+        row = evidence_map[evidence_id]
+        try:
+            metadata = json.loads(str(row.get("metadata_json") or "{}"))
+        except (ValueError, TypeError):
+            metadata = {}
+        if isinstance(metadata, dict) and metadata.get("import_id"):
+            snapshots.extend(_imported_metric_snapshots(root, memory, evidence_id, row, metadata, query))
+            continue
+        snap = _snapshot_evidence(evidence_id, row, query=query)
         if snap is not None:
             snapshots.append(snap)
     # Conflict policy fail: same (metric, run identity, kind) with different values.
@@ -703,9 +794,20 @@ def verify_ledger(workspace: str | Path, memory: Any, ledger_id: str) -> dict[st
             except (TypeError, ValueError):
                 meta = {}
             import_id = meta.get("import_id") if isinstance(meta, dict) else None
+            if snap.get("adapter_id") and (not import_id or import_id != snap.get("import_id")):
+                stale.append(eid)
+                continue
             if import_id:
                 try:
                     valid, _ = approval_valid(workspace, memory, str(import_id))
+                    if valid and snap.get("adapter_id"):
+                        # Re-derive imported observations, not just the approval.
+                        # This also checks current row provenance and semantics.
+                        candidates = _imported_metric_snapshots(
+                            root, memory, eid, dict(row), meta,
+                            ResultLedgerQuery(purpose="diagnostic", evidence_ids=(eid,)))
+                        valid = any(candidate["evidence_snapshot_digest"] == snap.get("evidence_snapshot_digest")
+                                    for candidate in candidates)
                 except Exception:
                     valid = False
                 if not valid:
