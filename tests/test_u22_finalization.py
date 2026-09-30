@@ -66,7 +66,7 @@ def test_validation_digest_stable_and_idempotent(tmp_path: Path) -> None:
     assert "validation_digest" in first
     assert first["validation_digest"] == second["validation_digest"]
     # Digest payload excludes volatile timestamps and itself.
-    assert "created_at" not in first or True  # file keeps audit timestamps
+    assert first.get("validated_at")  # file keeps audit timestamps
     from paperforge.external_import import _stable_validation_payload, _validation_digest
 
     stable = _stable_validation_payload(first)
@@ -312,7 +312,7 @@ def test_subprocess_reopen_sees_committed_state(tmp_path: Path) -> None:
     service, record = _stage_basic(tmp_path, name="sub.json", content='{"v": 1}\n')
     _approve_all_human(tmp_path, service, record)
     out = materialize_import(tmp_path, service.memory, record.import_id)
-    code = (
+    _code = (
         "import json,sys; from paperforge.api import PaperForgeService; "
         f"s=PaperForgeService({str(tmp_path)!r}); "
         f"print(json.dumps(s.memory.get_evidence_count() if hasattr(s.memory,'get_evidence_count') else 1))"

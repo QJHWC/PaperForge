@@ -74,7 +74,7 @@ def _build_pdf(pages: list[dict]) -> bytes:
     xref_offset = len(header) + len(body)
     xref = ("xref\n0 " + str(num_objects + 1) + "\n0000000000 65535 f \n").encode()
     for obj_id in range(1, num_objects + 1):
-        xref += ("%010d 00000 n \n" % offsets.get(obj_id, 0)).encode()
+        xref += f"{offsets.get(obj_id, 0):010d} 00000 n \n".encode()
     trailer = ("trailer\n<< /Size " + str(num_objects + 1) + " /Root 1 0 R >>\nstartxref\n"
                + str(xref_offset) + "\n%%EOF\n").encode()
     return header + body + xref + trailer
@@ -179,7 +179,7 @@ def test_render_every_page_and_failure(tmp_path: Path) -> None:  # 14,15
 def test_render_stale_and_parity(tmp_path: Path) -> None:  # 16,17
     from paperforge.pdf_qa import SyntheticContentHashRenderer
 
-    service = _service(tmp_path)
+    _service(tmp_path)
     rel = _write(tmp_path, "a.pdf", _build_pdf([_page([(12, "Hello")])]))
     sha = hashlib.sha256((tmp_path / rel).read_bytes()).hexdigest()
     data = (tmp_path / rel).read_bytes()

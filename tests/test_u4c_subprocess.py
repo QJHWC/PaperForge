@@ -8,13 +8,13 @@ import sys
 from pathlib import Path
 
 import pytest
+from test_u4b_finalization import setup_target
+from test_u4c_result_recovery import prepared
+from test_u22_import_transaction import _approve_needs_human, _stage
 
 from paperforge.api import PaperForgeService
 from paperforge.external_import import materialize_import, reconcile_imports
 from paperforge.result_update import reconcile_result_updates
-from test_u22_import_transaction import _approve_needs_human, _stage
-from test_u4b_finalization import setup_target
-from test_u4c_result_recovery import prepared
 
 
 def kill_at_checkpoint(root: Path, mode: str, identity: str = "unused") -> None:
@@ -81,7 +81,11 @@ def test_result_update_real_sigkill_reopen(tmp_path, mode, expected):
 
 
 def test_evaluator_real_sigkill_has_no_domain_mutation(tmp_path):
-    from paperforge.release_eligibility import assessment_current, evaluate_release, freeze_assessment
+    from paperforge.release_eligibility import (
+        assessment_current,
+        evaluate_release,
+        freeze_assessment,
+    )
 
     service, target, policy = setup_target(tmp_path)
     (tmp_path / "test-target.json").write_text(json.dumps(target.to_dict()))
@@ -101,7 +105,11 @@ def test_evaluator_real_sigkill_has_no_domain_mutation(tmp_path):
 
 
 def test_release_freeze_real_sigkill_before_registry(tmp_path):
-    from paperforge.release_eligibility import assessment_current, evaluate_release, freeze_assessment
+    from paperforge.release_eligibility import (
+        assessment_current,
+        evaluate_release,
+        freeze_assessment,
+    )
 
     service, target, policy = setup_target(tmp_path)
     (tmp_path / "test-target.json").write_text(json.dumps(target.to_dict()))

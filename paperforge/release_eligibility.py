@@ -3,13 +3,18 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from contextlib import contextmanager
+from collections.abc import Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
+from .immutable_artifacts import (
+    register_immutable,
+    verify_registered_bundle,
+    write_immutable_bundle,
+)
 from .models import utc_now
-from .immutable_artifacts import register_immutable, verify_registered_bundle, write_immutable_bundle
 from .path_safety import atomic_write_text, reject_symlink_components, safe_mkdir
 
 REPORT_SCHEMA = "paperforge.release-eligibility-report/v1"
@@ -254,10 +259,8 @@ def _snapshot(root: Path, memory: Any, target: ReleaseTarget,
               inputs: Mapping[str, Any]) -> dict[str, Any]:
     paths = {target.manuscript_path, target.final_pdf_path, target.build_manifest_path,
              *target.bibliography_hashes}
-    try:
+    with suppress(OSError, ValueError, TypeError, ReleaseEligibilityError):
         paths.update(_json_file(root, target.build_manifest_path).get("source_hashes", {}))
-    except (OSError, ValueError, TypeError, ReleaseEligibilityError):
-        pass
     for key, folder, name in (("ledger_ids", "ledgers", "ledger.json"),
                                ("review_ids", "reviews", "review.json"),
                                ("pdf_bundle_ids", "pdf_qa", "qa.json")):
@@ -443,7 +446,7 @@ def evaluate_release(
                            remediation="materialize required evidence"))
     else:
         blocked = [str(e.get("evidence_id")) for e in evidence_refs
-                   if str((e.get("environment_role") or "")) != "scientific"
+                   if str(e.get("environment_role") or "") != "scientific"
                    or str(e.get("measurement_kind") or "") not in {"measured", "simulated", "remapped", "derived"}]
         stale = [str(e.get("evidence_id")) for e in evidence_refs if e.get("current") is False]
         if blocked:

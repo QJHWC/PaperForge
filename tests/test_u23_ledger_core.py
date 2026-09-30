@@ -9,7 +9,6 @@ from paperforge.api import PaperForgeService
 from paperforge.evidence_semantics import EvidenceSemantics
 from paperforge.external_import import (
     approve_import,
-    materialize_import,
     stage_import,
     validate_import,
 )
@@ -294,8 +293,6 @@ def test_verify_file_tamper_and_stale(tmp_path: Path) -> None:
     ack = [c["check_id"] for c in report["checks"] if c["status"] == "needs_human"]
     approve_import(tmp_path, service.memory, record.import_id, approver="local-owner", acknowledged_checks=ack, rationale="ok")
     # Metric evidence linked to the import for currentness tracking.
-    with service.memory.connect() as db:
-        mat_row = None
     from paperforge.external_import import materialize_import as _mat
 
     out = _mat(tmp_path, service.memory, record.import_id)

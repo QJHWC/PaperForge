@@ -4,13 +4,13 @@ import json
 from enum import Enum
 
 import pytest
+from test_u4c_result_recovery import prepared, set_state
+from test_u22_import_transaction import _approve_needs_human, _stage
 
 from paperforge.api import PaperForgeService
 from paperforge.external_import import ApprovalError, materialize_import, reconcile_imports
 from paperforge.models import WorkflowStatus
 from paperforge.result_update import reconcile_result_updates
-from test_u22_import_transaction import _approve_needs_human, _stage
-from test_u4c_result_recovery import prepared, set_state
 
 
 class RecoveryOutcome(str, Enum):
@@ -141,9 +141,8 @@ def test_sqlite_durability_audit_and_rollback(tmp_path):
         assert db.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
         assert db.execute("PRAGMA synchronous").fetchone()[0] == 2  # FULL on this configured connection
         assert db.execute("PRAGMA foreign_keys").fetchone()[0] == 1
-    with pytest.raises(RuntimeError, match="rollback"):
-        with service.memory.connect() as db:
-            db.execute("INSERT INTO metadata (key,value) VALUES ('u4c-rollback','uncommitted')")
-            raise RuntimeError("rollback")
+    with pytest.raises(RuntimeError, match="rollback"), service.memory.connect() as db:
+        db.execute("INSERT INTO metadata (key,value) VALUES ('u4c-rollback','uncommitted')")
+        raise RuntimeError("rollback")
     with PaperForgeService(tmp_path).memory.connect() as db:
         assert db.execute("SELECT value FROM metadata WHERE key='u4c-rollback'").fetchone() is None

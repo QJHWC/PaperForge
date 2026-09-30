@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import hashlib
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -9,6 +9,7 @@ import pytest
 from paperforge.api import PaperForgeService
 from paperforge.evidence_semantics import EvidenceSemantics
 from paperforge.external_import import (
+    ApprovalError,
     ConflictError,
     approval_valid,
     approve_import,
@@ -147,8 +148,8 @@ def test_needs_human_ack_recorded(tmp_path: Path) -> None:
 
 def test_approval_binds_both_hashes(tmp_path: Path) -> None:
     service, record = _stage(tmp_path)
-    report = validate_import(tmp_path, service.memory, record.import_id)
-    out = _approve_needs_human(tmp_path, service, record) or approve_import
+    validate_import(tmp_path, service.memory, record.import_id)
+    _approve_needs_human(tmp_path, service, record)
     # Re-fetch binding via approval_valid path: tamper validation.json
     vpath = tmp_path / ".paperforge" / "imports" / record.import_id / "validation.json"
     data = json.loads(vpath.read_text(encoding="utf-8"))
@@ -190,12 +191,9 @@ def test_unapproved_has_no_evidence(tmp_path: Path) -> None:
     service, record = _stage(tmp_path)
     validate_import(tmp_path, service.memory, record.import_id)
     with memory_evidence_count(service) as count_before:
-        with pytest.raises(Exception):
+        with pytest.raises(ApprovalError):
             materialize_import(tmp_path, service.memory, record.import_id)
         assert memory_evidence_count_now(service) == count_before
-
-
-from contextlib import contextmanager
 
 
 @contextmanager
@@ -260,7 +258,7 @@ def test_transcribed_cannot_become_measured(tmp_path: Path) -> None:
         source_files=["table.txt"],
     )
     validate_import(tmp_path, service.memory, record.import_id)
-    with pytest.raises(Exception):
+    with pytest.raises(ApprovalError):
         # Transcribed is not admissible; materialize refuses.
         report = validate_import(tmp_path, service.memory, record.import_id)
         ack = [c["check_id"] for c in report["checks"] if c["status"] == "needs_human"]
@@ -396,7 +394,7 @@ def test_old_approval_preserved_but_invalid(tmp_path: Path) -> None:
             "SELECT COUNT(*) AS c FROM import_approvals WHERE import_id=?", (record.import_id,)
         ).fetchone()["c"]
     assert before >= 1
-    with pytest.raises(Exception):
+    with pytest.raises(ApprovalError):
         materialize_import(tmp_path, service.memory, record.import_id)
     with service.memory.connect() as db:
         after = db.execute(

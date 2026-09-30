@@ -4,12 +4,9 @@ import hashlib
 import json
 from pathlib import Path
 
-import pytest
-
 from paperforge.api import PaperForgeService
 from paperforge.release_eligibility import (
     EngineeringCheckResult,
-    ReleaseEligibilityError,
     ReleasePolicy,
     ReleaseTarget,
     assessment_current,

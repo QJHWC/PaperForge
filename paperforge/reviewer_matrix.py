@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .models import utc_now
-from .path_safety import safe_mkdir
 
 MATRIX_SCHEMA = "paperforge.reviewer-matrix/v1"
 ACTION_TYPES = (
@@ -178,8 +178,6 @@ class ReviewerResponseRecord:
     response_facts: tuple[Mapping[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
-        forbidden = ("we have measured", "we have validated")
-        lowered = " ".join(str(f) for f in self.response_facts).lower()
         object.__setattr__(self, "actions_completed", tuple(self.actions_completed or ()))
         object.__setattr__(self, "evidence_ids", tuple(self.evidence_ids or ()))
         object.__setattr__(self, "revision_locations", tuple(self.revision_locations or ()))
@@ -257,7 +255,7 @@ def derive_action_status(
     required = [c for c in criteria if c.required]
     # Hardware/fixture guards: binding kinds must match criterion types.
     for criterion in required:
-        params = dict(criterion.params or {})
+        _params = dict(criterion.params or {})
         if criterion.criterion_type == "hardware_measurement":
             kinds = {b.artifact_kind for b in bindings if b.action_id == action.action_id}
             if "imported_evidence" not in kinds and "human_verification" not in kinds:
@@ -403,7 +401,7 @@ def verify_review_matrix(workspace: str | Path, memory: Any, matrix_id: str) -> 
             stale.append(str(binding.get("binding_id")))
     # Criteria completeness: every required criterion referenced by >=1 action.
     required_ids = {str(c.get("criterion_id")) for c in payload.get("criteria", []) if c.get("required")}
-    referenced = set()
+    referenced: set[str] = set()
     for action in payload.get("actions", []) or []:
         referenced.update(str(c) for c in action.get("acceptance_criteria") or [])
     complete = required_ids.issubset(referenced)

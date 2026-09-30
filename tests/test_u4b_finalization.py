@@ -191,7 +191,11 @@ def test_engineering_and_environment_pass_then_log_change_stales(tmp_path):
 
 def matrix_fixture(root, service, target, *, bind=True, optional=False):
     from paperforge.reviewer_matrix import (
-        AcceptanceCriterion, EvidenceBinding, ReviewerAction, ReviewerComment, freeze_review_matrix,
+        AcceptanceCriterion,
+        EvidenceBinding,
+        ReviewerAction,
+        ReviewerComment,
+        freeze_review_matrix,
     )
 
     target_data = {k: v for k, v in target.to_dict().items() if k != "created_at"}
@@ -296,7 +300,12 @@ def test_domain_evidence_change_stales_report(tmp_path):
 
 def test_default_policy_all_gates_then_external_source_change(tmp_path):
     from paperforge.evidence_semantics import EvidenceSemantics
-    from paperforge.external_import import approve_import, materialize_import, stage_import, validate_import
+    from paperforge.external_import import (
+        approve_import,
+        materialize_import,
+        stage_import,
+        validate_import,
+    )
     from paperforge.release_eligibility import freeze_assessment
     from paperforge.scientific_review import ScientificClaim, freeze_review, review_claim
 
@@ -361,7 +370,11 @@ def test_unified_release_summary_is_only_a_projection():
 @pytest.mark.parametrize("criterion_type", ["layout", "manuscript_clarification", "unknown_future_criterion"])
 def test_measurement_cannot_satisfy_unrelated_reviewer_criterion(tmp_path, criterion_type):
     from paperforge.reviewer_matrix import (
-        AcceptanceCriterion, EvidenceBinding, ReviewerAction, ReviewerComment, freeze_review_matrix,
+        AcceptanceCriterion,
+        EvidenceBinding,
+        ReviewerAction,
+        ReviewerComment,
+        freeze_review_matrix,
     )
 
     service, target, policy = setup_target(tmp_path)

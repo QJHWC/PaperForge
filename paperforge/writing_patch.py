@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from engine.secret_redaction import contains_secret
 
@@ -81,9 +82,7 @@ def _looks_truncated(text: str) -> bool:
     if begins != ends:
         return True
     # Model fence leftovers or ellipsis markers are not valid patches.
-    if stripped.endswith("```"):
-        return True
-    return False
+    return bool(stripped.endswith("```"))
 
 
 def _resolve_target(workspace: Path, raw: str | Path) -> tuple[Path, str]:

@@ -3,10 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 NARRATIVE_SPEC_SCHEMA = "paperforge.grounded-narrative-spec/v1"
 NARRATIVE_DRAFT_SCHEMA = "paperforge.grounded-narrative-draft/v1"
@@ -280,7 +281,7 @@ def validate_narrative(
                     if key == "model_id" and expected.lower() not in lowered:
                         # Model must be named correctly when the fact is model-specific.
                         pass
-                    for candidate in (f"{key} {expected}", str(expected)):
+                    for _candidate in (f"{key} {expected}", str(expected)):
                         pass
                 text_identity = {
                     "input_size": re.search(r"(\d{3,4})\s*px", sent.text, re.I),
@@ -367,7 +368,7 @@ def build_update_from_narrative(
     facts: Sequence[Mapping[str, Any]], target_spec_kwargs: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Validate + render + hand to U2.4A. Never writes the target itself."""
-    from .result_update import ResultUpdateSpec, build_proposal
+    from .result_update import ResultUpdateSpec
 
     validation = validate_narrative(spec, paragraphs, facts=facts)
     if validation["overall_status"] == "failed":

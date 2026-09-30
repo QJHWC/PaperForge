@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
-from dataclasses import asdict, dataclass, field
-from decimal import Decimal, InvalidOperation
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from decimal import ROUND_HALF_EVEN, Context, Decimal, InvalidOperation, localcontext
 from pathlib import Path
-from typing import Any, Mapping, Sequence
-
-from decimal import ROUND_HALF_EVEN, Context, localcontext
+from typing import Any
 
 from .evidence_semantics import EvidenceSemantics
 from .external_import import RUN_IDENTITY_SCHEMA, ScientificRunIdentity
@@ -334,8 +334,8 @@ def _apply_unit_conversions(
                 try:
                     factor = Decimal(str(rule.get("factor", "1")))
                     value = Decimal(str(snap["value_str"])) * factor if snap.get("value_str") else None
-                except (InvalidOperation, TypeError):
-                    raise LedgerError(f"invalid conversion factor: {rule}")
+                except (InvalidOperation, TypeError) as exc:
+                    raise LedgerError(f"invalid conversion factor: {rule}") from exc
                 converted = {
                     **snap,
                     "value_str": format(value, "f") if value is not None else None,
@@ -372,8 +372,8 @@ def _aggregate(
     for snap in relevant:
         identity = dict(snap.get("run_identity") or {})
         key_parts = [spec.metric]
-        for field in sorted(set(spec.group_by)):
-            key_parts.append(f"{field}={identity.get(field, '')}")
+        for dimension in sorted(set(spec.group_by)):
+            key_parts.append(f"{dimension}={identity.get(dimension, '')}")
         key = "\x1f".join(key_parts)
         groups.setdefault(key, []).append(snap)
     rows: list[dict[str, Any]] = []
@@ -414,7 +414,7 @@ def _aggregate(
                 raise LedgerError(f"unknown reducer: {spec.reducer}")
         first = members[0]
         row_id = hashlib.sha256(
-            f"{spec.metric}\x1f{key}\x1f{spec.reducer}".encode("utf-8")
+            f"{spec.metric}\x1f{key}\x1f{spec.reducer}".encode()
         ).hexdigest()[:16]
         rows.append(
             {
@@ -593,7 +593,6 @@ def _register_ledger_artifacts(
 
     snapshots = list(payload.get("snapshots") or [])
     ledger_path = root / ".paperforge" / "ledgers" / ledger_id / "ledger.json"
-    manifest_path = root / ".paperforge" / "ledgers" / ledger_id / "manifest.json"
     file_sha = hashlib.sha256(ledger_path.read_bytes()).hexdigest() if ledger_path.is_file() else ""
     metadata = {
         "ledger_id": ledger_id,
@@ -638,10 +637,8 @@ def _unregister_ledger_artifacts(root: Path, memory: Any, ledger_id: str) -> Non
             f".paperforge/ledgers/{ledger_id}/ledger.json",
             f".paperforge/ledgers/{ledger_id}/manifest.json",
         ):
-            try:
+            with contextlib.suppress(OSError):
                 db.execute("DELETE FROM artifacts WHERE path=?", (rel,))
-            except OSError:
-                pass
 
 
 def _ledger_paths(root: Path, ledger_id: str) -> tuple[Path, Path, Path]:

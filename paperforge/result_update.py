@@ -4,10 +4,10 @@ import difflib
 import hashlib
 import json
 import re
-import uuid
-from dataclasses import asdict, dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .models import utc_now
 from .path_safety import atomic_write_text, reject_symlink_components, safe_mkdir
@@ -16,7 +16,6 @@ from .protected_blocks import (
     PROTECTED_START,
     ProtectedBlockViolation,
     extract_protected_blocks,
-    protected_blocks_sha256,
 )
 
 UPDATE_SPEC_SCHEMA = "paperforge.result-update-spec/v1"
@@ -307,7 +306,6 @@ def _verify_ledger_bindings(workspace: str | Path, memory: Any, bindings: Sequen
             pass
         # Compare digest when the binding declares one.
         try:
-            from .result_ledger import _ledger_paths
             import json as _json
 
             ledger_payload = _json.loads((root / ".paperforge" / "ledgers" / ledger_id / "ledger.json").read_bytes().decode())
@@ -438,10 +436,9 @@ def build_proposal(
                              "canonical": str(fact_values[matched].get("value")),
                              "unit": str(fact_values[matched].get("unit") or cand["unit"])})
         elif cand["kind"] == "protocol":
-            key = (re.sub(r"\s+", " ", cand["text"]).strip().lower(), cand["unit"].strip().lower())
             # Match by numeric value + provenance-bearing allowlist entry.
-            matched = None
-            for (name, unit), entry in protocol_allow.items():
+            matched_protocol = None
+            for (_name, unit), entry in protocol_allow.items():
                 try:
                     from decimal import Decimal
 
@@ -450,15 +447,15 @@ def build_proposal(
                     ):
                         if not str(entry.get("source") or "").strip():
                             continue
-                        matched = entry
+                        matched_protocol = entry
                         break
                 except Exception:
                     continue
-            if matched is None:
+            if matched_protocol is None:
                 raise ResultUpdateValidationError(
                     f"UNBOUND_PROTOCOL_VALUE: {cand['text']!r} needs provenance-bearing protocol binding"
                 )
-            protocol_bindings.append({"occurrence": cand["text"], "binding": matched})
+            protocol_bindings.append({"occurrence": cand["text"], "binding": matched_protocol})
     # Citations.
     for key in _extract_citations(proposed_block):
         if key not in set(spec.allowed_citation_keys):
@@ -538,7 +535,7 @@ def approve_proposal(
     spec_data = json.loads((base / "spec.json").read_text(encoding="utf-8"))
     _verify_ledger_bindings(workspace, memory, proposal.get("ledger_bindings") or [])
     _verify_proposal_artifacts(workspace, memory, proposal)
-    spec = ResultUpdateSpec(
+    _spec = ResultUpdateSpec(
         target_path=spec_data["target_path"],
         target_source_sha256=proposal["target_source_sha256"],
         protected_block_index=0,

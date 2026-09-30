@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
-from .models import utc_now
 from .path_safety import safe_mkdir
 
 TABLE_GENERATOR_VERSION = "paperforge.table-generator/v1"
@@ -242,7 +242,7 @@ def generate_table(
         })
     # Map metric columns: each ledger row carries one metric; pivot by row.
     # For v1, columns are metrics and each row contributes its own metric cell.
-    for table_row, ledger_row in zip(table_rows, selected):
+    for table_row, ledger_row in zip(table_rows, selected, strict=False):
         metric = str(ledger_row.get("metric_name") or "")
         if metric in spec.columns:
             table_row["metric_values"][metric] = ledger_row.get("value_str")
@@ -296,7 +296,7 @@ def generate_table(
         f"{table_id}.tex" if False else "table.tex": ("\n".join(tex_lines) + "\n").encode("utf-8"),
         "table.json": (json.dumps(table_json, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"),
     }
-    manifest = {
+    manifest: dict[str, Any] = {
         "schema": "paperforge.table-manifest/v1",
         "table_id": table_id,
         "table_spec_digest": spec_digest,
@@ -391,7 +391,7 @@ def generate_figure(
         f"<title>{_tex_escape(figure_id)}</title>"
         + "".join(sorted(svg_points)) + "</svg>\n"
     )
-    pdf_body = f"%PDF-1.4\n%{figure_id}\n".encode("utf-8") + svg.encode("utf-8") + b"\n%%EOF\n"
+    pdf_body = f"%PDF-1.4\n%{figure_id}\n".encode() + svg.encode("utf-8") + b"\n%%EOF\n"
     contents = {
         "plot_data.json": (json.dumps(plot_data, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"),
         "plot_data.csv": ("series,x,y,x_row_id,y_row_id\n" + "".join(
@@ -401,7 +401,7 @@ def generate_figure(
         "figure.svg": svg.encode("utf-8"),
         "figure.pdf": pdf_body,
     }
-    manifest = {
+    manifest: dict[str, Any] = {
         "schema": "paperforge.figure-manifest/v1", "figure_id": figure_id,
         "figure_spec_digest": spec_digest, "ledger_id": spec.ledger_id,
         "ledger_digest": ledger.get("ledger_digest"), "generator_version": FIGURE_GENERATOR_VERSION,
@@ -452,7 +452,7 @@ def generate_facts(
         row = rows.get(spec.row_id)
         if row is None:
             raise PublicationArtifactError(f"row missing: {spec.row_id}")
-        fact = {
+        fact: dict[str, Any] = {
             "fact_id": spec.fact_id or f"fact-{hashlib.sha256(spec.row_id.encode()).hexdigest()[:12]}",
             "kind": "metric",
             "subject": str((row.get("run_identity") or {}).get("model_id") or ""),
@@ -504,7 +504,7 @@ def generate_facts(
     out_dir = safe_mkdir(root / "artifacts" / "facts" / fact_id, anchor=root)
     facts_payload = {"facts": [fact], "spec": spec.to_canonical(), "spec_digest": spec_digest}
     contents = {"facts.json": (json.dumps(facts_payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")}
-    manifest = {
+    manifest: dict[str, Any] = {
         "schema": "paperforge.fact-manifest/v1", "fact_id": fact_id, "fact_spec_digest": spec_digest,
         "ledger_id": spec.ledger_id, "ledger_digest": ledger.get("ledger_digest"),
         "generator_version": FACT_GENERATOR_VERSION, "evidence_ids": list(fact["evidence_ids"]),
@@ -596,7 +596,7 @@ def verify_publication_bundle(
         return {"consistent": False, "artifact_integrity": False, "ledger_consistency": False,
                 "layer_consistency": False, "publication_readiness": "not_ready",
                 "reason": "missing ledger_id/digest"}
-    same = len(set(zip(ledgers, digests))) == 1
+    same = len(set(zip(ledgers, digests, strict=False))) == 1
     if same and not layer_refs:
         return {"consistent": True, "artifact_integrity": True, "ledger_consistency": True,
                 "layer_consistency": True, "publication_readiness": "candidate_not_ready",

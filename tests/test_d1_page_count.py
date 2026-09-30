@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 from paperforge.pdf_qa import preflight_pdf, render_pages
 
@@ -9,7 +8,7 @@ from paperforge.pdf_qa import preflight_pdf, render_pages
 def _pages(n: int) -> bytes:
     from tests.test_u3b2_pdf_qa import _build_pdf, _page
 
-    return _build_pdf([_page([(12, "p%d" % i)]) for i in range(n)])
+    return _build_pdf([_page([(12, f"p{i}")]) for i in range(n)])
 
 
 def test_compressed_multipage_count() -> None:  # 1

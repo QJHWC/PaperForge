@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .evidence_semantics import EvidenceSemantics, EvidenceSemanticsError
 from .models import utc_now
@@ -432,8 +434,10 @@ def validate_import(workspace: str | Path, memory: Any, import_id: str) -> dict[
     else:
         checks.append(_check_entry("schema_valid", "passed", IMPORT_SCHEMA))
     # Required metadata (minimal, auditable).
-    subject = manifest.get("subject") if isinstance(manifest.get("subject"), Mapping) else {}
-    execution = manifest.get("execution") if isinstance(manifest.get("execution"), Mapping) else {}
+    subject_value = manifest.get("subject")
+    execution_value = manifest.get("execution")
+    subject = subject_value if isinstance(subject_value, Mapping) else {}
+    execution = execution_value if isinstance(execution_value, Mapping) else {}
     for field in ("model_id", "dataset_id"):
         if str(subject.get(field) or "").strip():
             checks.append(_check_entry(f"subject.{field}", "passed", str(subject[field])[:120]))
@@ -470,7 +474,8 @@ def validate_import(workspace: str | Path, memory: Any, import_id: str) -> dict[
         checks.append(_check_entry("semantics_valid", "failed", str(exc)))
         checks.append(_check_entry("semantics_admissible", "failed", "invalid semantics"))
     # Sources: existence + hash recomputation.
-    declared = manifest.get("sources") if isinstance(manifest.get("sources"), list) else []
+    sources_value = manifest.get("sources")
+    declared = sources_value if isinstance(sources_value, list) else []
     actual_hashes: dict[str, str] = {}
     if not declared:
         checks.append(_check_entry("sources_present", "failed", "no sources declared"))
@@ -529,7 +534,8 @@ def validate_import(workspace: str | Path, memory: Any, import_id: str) -> dict[
             continue
         if _run_identity(other_manifest) != identity:
             continue
-        other_sources = other_manifest.get("sources") if isinstance(other_manifest.get("sources"), list) else []
+        other_sources_value = other_manifest.get("sources")
+        other_sources = other_sources_value if isinstance(other_sources_value, list) else []
         other_hashes = sorted(str(e.get("sha256") or "") for e in other_sources if isinstance(e, Mapping))
         my_hashes = sorted(str(e.get("sha256") or "") for e in declared if isinstance(e, Mapping))
         if (
@@ -862,7 +868,7 @@ def _validate_metric_provenance(
             elapsed = provenance.get("elapsed_time_s")
             if not isinstance(frames, int) or frames <= 0:
                 raise ApprovalError("windowed FPS requires positive frame_count")
-            if not isinstance(elapsed, (int, float)) or float(elapsed) <= 0:
+            if not isinstance(elapsed, int | float) or float(elapsed) <= 0:
                 raise ApprovalError("windowed FPS requires positive elapsed_time_s")
             return
         raise ApprovalError(f"unknown FPS acquisition_method: {method!r}")
@@ -902,10 +908,8 @@ def materialize_import(
     valid, reason = approval_valid(workspace, memory, import_id)
     if not valid:
         # Preserve the old approval row; mark state for audit and refuse.
-        try:
+        with contextlib.suppress(OSError):
             _invalidate_approval(memory, import_id, reason)
-        except OSError:
-            pass
         raise ApprovalError(f"approval invalid: {reason}")
     manifest_path, _, _ = _import_paths(root, import_id)
     manifest, manifest_sha = _read_canonical_manifest(manifest_path)

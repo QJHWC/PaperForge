@@ -11,7 +11,6 @@ from paperforge.metric_adapters import (
     MetricExtractorRegistry,
     UnsupportedMetricSource,
 )
-from paperforge.metric_observation import MetricObservation
 from paperforge.publication_artifacts import (
     FactSummarySpec,
     FigureSpec,

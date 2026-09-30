@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -15,7 +14,6 @@ from paperforge.grounded_narrative import (
     validate_narrative,
 )
 from paperforge.provider import GenerationResult
-from paperforge.result_update import ResultUpdateSpec, build_proposal
 
 
 def _spec(**overrides):
@@ -202,7 +200,7 @@ def test_renderer_preserves_numbers_and_citations() -> None:  # 26,27
 
 
 def test_no_direct_file_write_and_u24a_gates(tmp_path: Path) -> None:  # 28,29,30
-    service = PaperForgeService(tmp_path)
+    PaperForgeService(tmp_path)
     tex = tmp_path / "paper.tex"
     tex.write_text("\\documentclass{article}\n\\begin{document}\nIntro.\n% PAPERFORGE-PROTECTED-EXPERIMENT-START\nOld 0.8511.\n% PAPERFORGE-PROTECTED-EXPERIMENT-END\n\\end{document}\n", encoding="utf-8")
     sents = [[_sent("Control 0.8511.")]]
@@ -216,7 +214,6 @@ def test_narrative_pass_not_approved_and_bytes_gate(tmp_path: Path) -> None:  # 
 
 
 def test_narrative_to_u24a_integration(tmp_path: Path) -> None:  # 29 (integration)
-    from paperforge.grounded_narrative import build_update_from_narrative
 
     service = PaperForgeService(tmp_path)
     sents = [[_sent("Control 0.8511.")]]

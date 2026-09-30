@@ -4,8 +4,9 @@ import csv
 import hashlib
 import io
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Protocol
 
 from .metric_observation import (
     AdapterContext,
@@ -27,10 +28,17 @@ class SemanticsMismatchError(UnsupportedMetricSource):
 
 
 class EvidenceMetricAdapter(Protocol):
-    adapter_id: str
-    adapter_version: str
-    supported_schema: str
-    supported_media: tuple[str, ...]
+    @property
+    def adapter_id(self) -> str: ...
+
+    @property
+    def adapter_version(self) -> str: ...
+
+    @property
+    def supported_schema(self) -> str: ...
+
+    @property
+    def supported_media(self) -> tuple[str, ...]: ...
 
     def extract(
         self,

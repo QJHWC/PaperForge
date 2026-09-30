@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import asdict, dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .path_safety import reject_symlink_components
 
@@ -63,7 +64,7 @@ class ReferenceBundle:
 
 
 def _stable_source_id(path: str, sha256: str) -> str:
-    digest = hashlib.sha256(f"{path}\x1f{sha256}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{path}\x1f{sha256}".encode()).hexdigest()
     return f"ref_{digest[:16]}"
 
 
@@ -109,7 +110,7 @@ def _extract_pdf(
     page_end: int | None = None
     detail = ""
     try:
-        import fitz  # type: ignore
+        import fitz
 
         doc = fitz.open(stream=data, filetype="pdf")
         try:
@@ -135,8 +136,9 @@ def _extract_pdf(
         detail = f"pymupdf failed ({type(exc).__name__}); "
 
     try:
-        from pypdf import PdfReader  # type: ignore
         import io
+
+        from pypdf import PdfReader
 
         reader = PdfReader(io.BytesIO(data))
         for index, page in enumerate(reader.pages):
@@ -286,7 +288,7 @@ def bundle_from_payload(
     raw = payload.get("reference_paths")
     if raw is None:
         return ReferenceBundle()
-    paths = list(raw) if isinstance(raw, (list, tuple)) else [raw]
+    paths = list(raw) if isinstance(raw, list | tuple) else [raw]
     return ReferenceLoader(workspace).load(paths, budget_bytes=budget_bytes)
 
 

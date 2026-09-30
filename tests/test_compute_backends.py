@@ -917,6 +917,7 @@ def test_local_backend_recovers_completed_state_without_secret_environment(
     submitted = backend.submit(
         JobSpec(
             name="redacted-and-durable",
+            workdir=str(tmp_path),
             command=[
                 sys.executable,
                 "-c",
@@ -958,6 +959,7 @@ def test_local_backend_recovers_live_job_after_backend_restart(
     ).submit(
         JobSpec(
             name="restart-live",
+            workdir=str(tmp_path),
             command=[
                 sys.executable,
                 "-c",
@@ -1000,6 +1002,7 @@ def test_local_backend_does_not_persist_or_inherit_host_credentials(
     submitted = backend.submit(
         JobSpec(
             name="clean-environment",
+            workdir=str(tmp_path),
             command=[
                 sys.executable,
                 "-c",

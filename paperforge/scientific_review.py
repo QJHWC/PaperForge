@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import Any, Mapping, Sequence
+from pathlib import Path
+from typing import Any
 
 CLAIM_TYPES = (
     "descriptive_metric", "comparison", "ranking", "statistical_superiority",
@@ -60,7 +62,8 @@ class ScientificClaim:
         roles_to_type = {"metric_report": "descriptive_metric", "comparison": "comparison",
                          "protocol_statement": "protocol_statement", "limitation": "limitation",
                          "provenance_statement": "descriptive_metric", "transition": "descriptive_metric"}
-        inferred = str(sentence.get("claim_types")[0]) if sentence.get("claim_types") else roles_to_type.get(str(sentence.get("role") or ""), claim_type)
+        claim_types = sentence.get("claim_types")
+        inferred = str(claim_types[0]) if claim_types else roles_to_type.get(str(sentence.get("role") or ""), claim_type)
         if inferred not in CLAIM_TYPES:
             inferred = "descriptive_metric"
         # Text rules only fill gaps; structured role/claim_types win.
@@ -238,7 +241,7 @@ def check_calibration_overlap(claim: ScientificClaim, facts: Mapping[str, Mappin
     roles = dict(roles or {})
 
     def _has(role_value: Any, target: str) -> bool:
-        if isinstance(role_value, (list, tuple, set)):
+        if isinstance(role_value, list | tuple | set):
             return target in role_value
         return role_value == target
 
@@ -416,7 +419,6 @@ def check_statistical_binding(
                        facts_used=tuple(claim.fact_ids))
     claim_evidence = {str(fid) for fid in claim.fact_ids if str(fid).strip()}
     for entry in statistical_evidence or []:
-        evidence = entry if isinstance(entry, StatisticalEvidence) else None
         data = entry.to_dict() if isinstance(entry, StatisticalEvidence) else dict(entry)
         # Evidence set must overlap the claim's facts; unrelated analyses never bind.
         evidence_set = {str(eid) for eid in data.get("evidence_ids") or []}

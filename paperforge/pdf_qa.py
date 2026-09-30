@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .models import utc_now
 from .path_safety import safe_mkdir
@@ -112,8 +113,9 @@ def _resolve_pdf(root: Path, rel: str) -> Path:
 
 def preflight_pdf(data: bytes) -> dict[str, Any]:
     try:
-        from pypdf import PdfReader
         import io as _io
+
+        from pypdf import PdfReader
 
         reader = PdfReader(_io.BytesIO(data))
         pages = list(reader.pages)
@@ -248,9 +250,9 @@ class PopplerRenderer(RenderBackend):
             self.renderer_version = "unknown"
 
     def render(self, data: bytes, page: int, dpi: int) -> dict[str, Any]:
+        import os as _os
         import subprocess as _subprocess
         import tempfile as _tempfile
-        import os as _os
 
         if b"RENDER_FAIL" in data:
             raise PdfQaError("render failure (fixture marker)")
@@ -304,8 +306,9 @@ def render_pages(data: bytes, *, dpi: int = 200, renderer: str = "primary",
                  allow_synthetic: bool = False) -> list[dict[str, Any]]:
     """Render every page to real raster bytes (default) or explicit fixture mode."""
     try:
-        from pypdf import PdfReader as _PdfReader
         import io as _io
+
+        from pypdf import PdfReader as _PdfReader
 
         count = max(1, len(_PdfReader(_io.BytesIO(data)).pages))
     except Exception:
@@ -366,8 +369,9 @@ HUMAN_CHECKLIST = (
 
 def resolve_caption_page(data: bytes, caption: str) -> dict[str, Any]:
     try:
-        from pypdf import PdfReader
         import io as _io
+
+        from pypdf import PdfReader
 
         reader = PdfReader(_io.BytesIO(data))
         hits = []
@@ -380,7 +384,6 @@ def resolve_caption_page(data: bytes, caption: str) -> dict[str, Any]:
                 hits.append(index)
     except Exception:
         # Fallback: raw byte search (still deterministic, no page guessing).
-        text = data.decode("latin-1", errors="ignore")
         hits = [1] if caption.encode("latin-1", errors="ignore")[:12] in data else []
     if not hits:
         return {"status": "pending", "page": None}
@@ -410,7 +413,7 @@ def evaluate_layout_criterion(
         return {"verified": False,
                 "reason": f"target issue {issue_id} not resolved (status={status})"}
     if target_pages:
-        human_by_page = {}
+        human_by_page: dict[int, list[dict[str, Any]]] = {}
         for record in bundle.get("human_reviews", []) or []:
             if record.get("status") in {"passed", "passed_with_warnings"} and not record.get("stale"):
                 human_by_page.setdefault(int(record.get("page", 0)), []).append(record)
@@ -418,10 +421,10 @@ def evaluate_layout_criterion(
             if page not in human_by_page:
                 return {"verified": False, "reason": f"target page {page} lacks current human review"}
     if required_human_pages:
-        human_by_page = {int(r.get("page", 0)): r for r in bundle.get("human_reviews", []) or []
-                         if r.get("status") in {"passed", "passed_with_warnings"} and not r.get("stale")}
+        reviewed_required_pages = {int(r.get("page", 0)) for r in bundle.get("human_reviews", []) or []
+                                  if r.get("status") in {"passed", "passed_with_warnings"} and not r.get("stale")}
         for page in required_human_pages:
-            if page not in human_by_page:
+            if page not in reviewed_required_pages:
                 return {"verified": False, "reason": f"required human page {page} missing"}
     return {"verified": True, "reason": "target issues resolved with current human review"}
 
@@ -459,7 +462,7 @@ def run_pdf_qa(
     if secondary_renderer:
         secondary = render_pages(data, dpi=spec.renderer_dpi, renderer=secondary_renderer,
                                  backend=renderer_backend, allow_synthetic=allow_synthetic)
-        for primary, other in zip(renders, secondary):
+        for primary, other in zip(renders, secondary, strict=False):
             if primary["image_hash"] != other["image_hash"]:
                 parity.append({"page": primary["page"], "status": "needs_human",
                                "rationale": "renderer difference; neither renderer assumed correct",
@@ -482,17 +485,13 @@ def run_pdf_qa(
                 raise PdfQaError("human review must carry review_source=human_explicit")
             if not str(record.get("reviewed_at") or "").strip():
                 raise PdfQaError("human review requires reviewed_at")
-        if record.get("pdf_sha256") != actual_sha:
-            record["stale"] = True
-        elif str(record.get("render_sha256") or "") != render_hashes.get(int(record.get("page", 0)), ""):
+        if record.get("pdf_sha256") != actual_sha or str(record.get("render_sha256") or "") != render_hashes.get(int(record.get("page", 0)), ""):
             record["stale"] = True
     critical = [i for i in issues if i.get("severity") == "critical" and i.get("status") == "open"]
     needs_human = [i for i in issues if i.get("status") == "needs_human"]
     pages = {r["page"] for r in renders}
     reviewed_any = {r.get("page") for r in human_records if not r.get("stale")}
-    if critical:
-        state = "failed"
-    elif any(r.get("status") == "failed" for r in human_records):
+    if critical or any(r.get("status") == "failed" for r in human_records):
         state = "failed"
     elif needs_human or pages - reviewed_any:
         state = "needs_human"
@@ -514,7 +513,7 @@ def run_pdf_qa(
         "human_reviews": sorted(human_records, key=lambda r: int(r.get("page", 0))),
         "unresolved_critical": [i["issue_id"] for i in critical],
         "unresolved_warnings": [i["issue_id"] for i in issues if i.get("severity") == "warning" and i.get("status") == "open"],
-        "page_coverage_complete": sorted(pages) == sorted(reviewed_any) or not pages - reviewed_any,
+        "page_coverage_complete": not pages - reviewed_any,
         "layout_qa_state": state,
         "spec_digest": spec.digest(),
     }
@@ -569,10 +568,6 @@ def verify_pdf_qa(workspace: str | Path, memory: Any, bundle_id: str) -> dict[st
     digest_valid = stored == hashlib.sha256(_canonical(stable)).hexdigest()
     # Target PDF still matches?
     target_match = True
-    try:
-       pdf_bytes = None
-    except Exception:
-        pass
     historical = "valid" if digest_valid else "invalid"
     # Human/render currentness sampled from stored hashes (no recomputation of renders here).
     unresolved_critical = list(payload.get("unresolved_critical") or [])

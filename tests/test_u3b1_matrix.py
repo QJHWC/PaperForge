@@ -3,8 +3,6 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-import pytest
-
 from paperforge.api import PaperForgeService
 from paperforge.reviewer_matrix import (
     AcceptanceCriterion,
@@ -127,7 +125,6 @@ def test_response_no_early_claim() -> None:  # 18
 
 def test_hardware_type_match(tmp_path: Path) -> None:  # 19
     service = _service(tmp_path)
-    comment = _comment()
     action = _action()
     criterion = AcceptanceCriterion(criterion_id="c1", criterion_type="hardware_measurement")
     binding = EvidenceBinding(binding_id="b1", action_id="a1", artifact_kind="imported_evidence",

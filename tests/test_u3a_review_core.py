@@ -136,7 +136,6 @@ def test_assumptions_disclosed() -> None:  # 21,22
 
 
 def test_fixture_blocked_and_no_mutation() -> None:  # 23,24
-    from paperforge.scientific_review import review_claim as rc
 
     facts = {"f": {"measurement_kind": "measured"}}
     before = dict(facts["f"])
@@ -165,7 +164,6 @@ def test_no_pcb_hardcoding() -> None:  # 28
 
 
 def test_narrative_integration_and_regression() -> None:  # 29,30
-    from paperforge.grounded_narrative import NarrativeSentence
 
     sent = {"sentence_id": "s", "text": "Control 0.8511.", "role": "metric_report", "fact_ids": ["f1"]}
     claim = __import__("paperforge.scientific_review", fromlist=["ScientificClaim"]).ScientificClaim.from_narrative_sentence(sent)

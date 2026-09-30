@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
 import pytest
@@ -108,7 +107,7 @@ def test_structural_numbers_ignored(tmp_path: Path) -> None:  # F2-1,2
 
 
 def test_protocol_changes_require_binding(tmp_path: Path) -> None:  # F2-3,4,5
-    for old_proto, new_proto in (("300 epochs", "500 epochs"), ("3 seeds", "5 seeds"), ("896 px", "1024 px")):
+    for old_proto, _new_proto in (("300 epochs", "500 epochs"), ("3 seeds", "5 seeds"), ("896 px", "1024 px")):
         service = PaperForgeService(tmp_path / f"p-{old_proto.split()[0]}") if False else None
     service = PaperForgeService(tmp_path)
     block = "Trained 300 epochs on 896 px with 3 seeds. Old result 20.0 ms."

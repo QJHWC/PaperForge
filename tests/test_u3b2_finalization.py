@@ -28,7 +28,7 @@ def _pdf(pages) -> bytes:
 
 
 def test_real_raster_hash_from_image_bytes(tmp_path: Path) -> None:  # F1
-    service = _service(tmp_path)
+    _service(tmp_path)
     data = _pdf([[(12, "Hello")]])
     (tmp_path / "a.pdf").write_bytes(data)
     backend = PopplerRenderer()
@@ -42,10 +42,9 @@ def test_real_raster_hash_from_image_bytes(tmp_path: Path) -> None:  # F1
 
 
 def test_synthetic_blocked_for_production(tmp_path: Path) -> None:  # F1 gate
-    service = _service(tmp_path)
+    _service(tmp_path)
     data = _pdf([[(12, "Hello")]])
     (tmp_path / "a.pdf").write_bytes(data)
-    sha = hashlib.sha256(data).hexdigest()
     with pytest.raises(Exception, match="REAL_RENDERER_UNAVAILABLE"):
         render_pages(data, backend=SyntheticContentHashRenderer(), allow_synthetic=False)
     # Explicit fixture mode works but is marked fixture.

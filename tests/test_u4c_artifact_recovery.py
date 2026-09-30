@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 
 import pytest
+from test_u4b_finalization import setup_target
 
 from paperforge.api import PaperForgeService
 from paperforge.artifacts import ArtifactIntegrityError, ArtifactStore
 from paperforge.immutable_artifacts import verify_registered_bundle
-from test_u4b_finalization import setup_target
 
 
 def bundle_factory(root, kind):
@@ -21,7 +21,12 @@ def bundle_factory(root, kind):
         query = ResultLedgerQuery(purpose="scientific", metric_names=["latency_ms"], evidence_ids=(eid,))
         return service, lambda: freeze_ledger(root, service.memory, query), "ledger_id", "ledgers", "ledger.json", lambda i: verify_ledger(root, service.memory, i)["eligible_as_release_input"]
     if kind == "review":
-        from paperforge.scientific_review import ScientificClaim, freeze_review, review_claim, verify_scientific_review
+        from paperforge.scientific_review import (
+            ScientificClaim,
+            freeze_review,
+            review_claim,
+            verify_scientific_review,
+        )
 
         claim = ScientificClaim("c", "descriptive", "descriptive_metric", fact_ids=("f",))
         return service, lambda: freeze_review(root, service.memory, claims=[claim], results=review_claim(claim, facts={"f": {}})), "review_id", "reviews", "review.json", lambda i: verify_scientific_review(root, service.memory, i)["currently_valid_as_review_input"]
@@ -30,13 +35,23 @@ def bundle_factory(root, kind):
 
         return service, lambda: freeze_review_matrix(root, service.memory, comments=[], actions=[], criteria=[]), "matrix_id", "review_matrix", "matrix.json", lambda i: verify_review_matrix(root, service.memory, i)["currently_valid"]
     if kind == "pdf":
-        from paperforge.pdf_qa import PDFQASpec, SyntheticContentHashRenderer, run_pdf_qa, verify_pdf_qa
         from test_u3b2_pdf_qa import _build_pdf
+
+        from paperforge.pdf_qa import (
+            PDFQASpec,
+            SyntheticContentHashRenderer,
+            run_pdf_qa,
+            verify_pdf_qa,
+        )
 
         (root / "fixture.pdf").write_bytes(_build_pdf([{"texts": [(12, "Fixture")]}]))
         spec = PDFQASpec(target_pdf_path="fixture.pdf")
         return service, lambda: run_pdf_qa(root, service.memory, spec, renderer_backend=SyntheticContentHashRenderer(), allow_synthetic=True), "bundle_id", "pdf_qa", "qa.json", lambda i: verify_pdf_qa(root, service.memory, i)["currently_valid"]
-    from paperforge.release_eligibility import assessment_current, evaluate_release, freeze_assessment
+    from paperforge.release_eligibility import (
+        assessment_current,
+        evaluate_release,
+        freeze_assessment,
+    )
 
     service, target, policy = setup_target(root)
     report = evaluate_release(root, service.memory, target, policy)

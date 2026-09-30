@@ -5,10 +5,15 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from test_u24a_finalization import _fact, _spec_with_table
 
 from paperforge.api import PaperForgeService
-from paperforge.result_update import apply_proposal, approve_proposal, build_proposal, reconcile_result_updates
-from test_u24a_finalization import _fact, _spec_with_table
+from paperforge.result_update import (
+    apply_proposal,
+    approve_proposal,
+    build_proposal,
+    reconcile_result_updates,
+)
 
 
 def prepared(root: Path):

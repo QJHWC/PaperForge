@@ -114,7 +114,7 @@ def test_canonical_numeric_identity(tmp_path: Path) -> None:
     snap = ledger["snapshots"][0]
     assert snap["value_str"] == "46.5"
     assert snap["source_lexical_value"] == "46.500"
-    service2 = _service(tmp_path.parent / (tmp_path.name + "-b"))
+    _service(tmp_path.parent / (tmp_path.name + "-b"))
     # Numerically identical lexical forms share canonical digest path.
     from paperforge.result_ledger import _decimal_canonical
 
