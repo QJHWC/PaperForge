@@ -88,3 +88,20 @@ The earlier U4C/U4D-Prep reports are historical evidence, not current gate resul
   with hand-added scientific Evidence. A dedicated regression is required.
 - Integration smoke, final security, remote review, tool freeze and all paper
   revision requirements remain open. No push is authorized by this checkpoint alone.
+
+## Publication write safety repair
+
+- Added 24 red-first cases: three generators, temporary/output/manifest/directory
+  symlinks, traversal IDs, and deterministic retry. Before repair: 15 failed,
+  9 passed. After repair, these and existing artifact tests: 50 passed.
+- Table/figure/fact writes now prevalidate all members and retained legacy temp
+  names, reject unsafe artifact IDs, and use random exclusive temporary files,
+  file fsync and atomic replace. A malicious outside sentinel remains unchanged;
+  invalid paths are refused before any member output is written.
+- Independent reviewer replayed the original exploit and approved the fix with
+  no new HIGH/CRITICAL findings in scope. Concurrent directory replacement is
+  still outside the single-writer contract.
+- Full regression: **735 collected, 730 passed, 5 skipped, 0 failed, 0 errors**;
+  Ruff PASS; configured mypy PASS (80 source files). No assertion was weakened.
+- Commit `58783af` contains the earlier isolated-environment/static gate repairs;
+  this security repair is committed separately.

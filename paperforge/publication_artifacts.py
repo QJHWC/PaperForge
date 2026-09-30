@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from .path_safety import safe_mkdir
+from .path_safety import atomic_write_bytes, safe_output_path
 
 TABLE_GENERATOR_VERSION = "paperforge.table-generator/v1"
 FIGURE_GENERATOR_VERSION = "paperforge.figure-generator/v1"
@@ -22,6 +22,35 @@ _BANNED_FACT_WORDS = (
 
 class PublicationArtifactError(RuntimeError):
     pass
+
+
+def _bundle_path(category: str, artifact_id: str) -> Path:
+    if (not artifact_id or artifact_id in {".", ".."}
+            or any(char in artifact_id for char in "/\\:\x00")):
+        raise PublicationArtifactError("artifact ID must be a single safe path component")
+    return Path("artifacts") / category / artifact_id
+
+
+def _write_bundle(
+    root: Path, relative: Path, contents: Mapping[str, bytes], manifest: dict[str, Any],
+) -> list[str]:
+    # Validate every member before writing any bytes. Retain suspicious old temp
+    # files for investigation; never follow the former fixed-name temp paths.
+    for name in (*contents, "manifest.json"):
+        safe_output_path(root, relative / name)
+        safe_output_path(root, relative / f".{name}.tmp")
+    manifest["output_hashes"] = {
+        name: hashlib.sha256(data).hexdigest() for name, data in contents.items()
+    }
+    manifest_bytes = (json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
+    manifest["output_hashes"]["manifest.json"] = hashlib.sha256(manifest_bytes).hexdigest()
+    completed = {
+        **contents,
+        "manifest.json": (json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(),
+    }
+    for name, data in completed.items():
+        atomic_write_bytes(root, relative / name, data)
+    return [(relative / name).as_posix() for name in completed]
 
 
 def _canonical(payload: Mapping[str, Any]) -> bytes:
@@ -258,7 +287,7 @@ def generate_table(
         highlights.append({"metric": metric, "rule": which, "row_id": best[0]["row_id"]})
     spec_digest = spec.digest()
     table_id = spec.table_id or f"table-{spec_digest[:12]}"
-    out_dir = safe_mkdir(root / "artifacts" / "tables" / table_id, anchor=root)
+    relative = _bundle_path("tables", table_id)
     # data.csv (canonical), table.json (structured), table.tex (display).
     header = ["row_id", *spec.columns]
     csv_lines = [",".join(header)]
@@ -314,23 +343,7 @@ def generate_table(
         ],
         "output_hashes": {},
     }
-    output_paths: list[str] = []
-    for name, data in contents.items():
-        target = out_dir / name
-        tmp = target.with_name(f".{name}.tmp")
-        tmp.write_bytes(data)
-        tmp.replace(target)
-        manifest["output_hashes"][name] = hashlib.sha256(data).hexdigest()
-        output_paths.append(f"artifacts/tables/{table_id}/{name}")
-    manifest_bytes = (json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    manifest_path = out_dir / "manifest.json"
-    tmp = manifest_path.with_name(".manifest.json.tmp")
-    tmp.write_bytes(manifest_bytes)
-    tmp.replace(manifest_path)
-    manifest["output_hashes"]["manifest.json"] = hashlib.sha256(manifest_bytes).hexdigest()
-    # Rewrite manifest with its own hash included? Keep stable: hash covers outputs only.
-    manifest_path.write_bytes((json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-    output_paths.append(f"artifacts/tables/{table_id}/manifest.json")
+    output_paths = _write_bundle(root, relative, contents, manifest)
     _register_outputs(root, memory, output_paths,
                       kind_map={"data.csv": "table", "table.json": "table", "table.tex": "table", "manifest.json": "manifest"},
                       metadata={"artifact_type": "table", "generator_version": TABLE_GENERATOR_VERSION,
@@ -379,7 +392,7 @@ def generate_figure(
         series[group] = sorted(series[group], key=lambda p: (Decimal(p["x"]), Decimal(p["y"])))
     spec_digest = spec.digest()
     figure_id = spec.figure_id or f"figure-{spec_digest[:12]}"
-    out_dir = safe_mkdir(root / "artifacts" / "figures" / figure_id, anchor=root)
+    relative = _bundle_path("figures", figure_id)
     plot_data = {"figure_id": figure_id, "x_metric": spec.x_metric, "y_metric": spec.y_metric, "series": series}
     # Deterministic SVG (no timestamps) + minimal deterministic PDF wrapper.
     svg_points = []
@@ -416,19 +429,7 @@ def generate_figure(
         ],
         "output_hashes": {},
     }
-    output_paths = []
-    for name, data in contents.items():
-        target = out_dir / name
-        tmp = target.with_name(f".{name}.tmp")
-        tmp.write_bytes(data)
-        tmp.replace(target)
-        manifest["output_hashes"][name] = hashlib.sha256(data).hexdigest()
-        output_paths.append(f"artifacts/figures/{figure_id}/{name}")
-    manifest_bytes = (json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    (out_dir / "manifest.json").write_bytes(manifest_bytes)
-    manifest["output_hashes"]["manifest.json"] = hashlib.sha256(manifest_bytes).hexdigest()
-    (out_dir / "manifest.json").write_bytes((json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-    output_paths.append(f"artifacts/figures/{figure_id}/manifest.json")
+    output_paths = _write_bundle(root, relative, contents, manifest)
     _register_outputs(root, memory, output_paths,
                       kind_map={"plot_data.json": "figure", "plot_data.csv": "figure", "figure.svg": "figure", "figure.pdf": "figure", "manifest.json": "manifest"},
                       metadata={"artifact_type": "figure", "generator_version": FIGURE_GENERATOR_VERSION,
@@ -501,7 +502,7 @@ def generate_facts(
         raise PublicationArtifactError(f"unknown fact kind: {spec.kind}")
     spec_digest = spec.digest()
     fact_id = str(fact["fact_id"])
-    out_dir = safe_mkdir(root / "artifacts" / "facts" / fact_id, anchor=root)
+    relative = _bundle_path("facts", fact_id)
     facts_payload = {"facts": [fact], "spec": spec.to_canonical(), "spec_digest": spec_digest}
     contents = {"facts.json": (json.dumps(facts_payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")}
     manifest: dict[str, Any] = {
@@ -516,18 +517,7 @@ def generate_facts(
         ],
         "output_hashes": {name: hashlib.sha256(data).hexdigest() for name, data in contents.items()},
     }
-    output_paths = []
-    for name, data in contents.items():
-        target = out_dir / name
-        tmp = target.with_name(f".{name}.tmp")
-        tmp.write_bytes(data)
-        tmp.replace(target)
-        output_paths.append(f"artifacts/facts/{fact_id}/{name}")
-    manifest_bytes = (json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    (out_dir / "manifest.json").write_bytes(manifest_bytes)
-    manifest["output_hashes"]["manifest.json"] = hashlib.sha256(manifest_bytes).hexdigest()
-    (out_dir / "manifest.json").write_bytes((json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-    output_paths.append(f"artifacts/facts/{fact_id}/manifest.json")
+    output_paths = _write_bundle(root, relative, contents, manifest)
     _register_outputs(root, memory, output_paths,
                       kind_map={"facts.json": "result", "manifest.json": "manifest"},
                       metadata={"artifact_type": "fact", "generator_version": FACT_GENERATOR_VERSION,

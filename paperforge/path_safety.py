@@ -185,8 +185,32 @@ def atomic_write_text(
     return target
 
 
+def atomic_write_bytes(
+    workspace: str | Path,
+    relative_path: str | Path,
+    content: bytes,
+) -> Path:
+    target = safe_output_path(workspace, relative_path)
+    temporary: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=target.parent, prefix=f".{target.name}.", delete=False,
+        ) as stream:
+            temporary = stream.name
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+        temporary = None
+    finally:
+        if temporary is not None:
+            Path(temporary).unlink(missing_ok=True)
+    return target
+
+
 __all__ = [
     "UnsafePathError",
+    "atomic_write_bytes",
     "atomic_write_text",
     "is_link_or_reparse_point",
     "reject_symlink_components",
