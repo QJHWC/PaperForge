@@ -79,6 +79,24 @@ def test_imported_ledger_verifies_in_read_only_release_context(tmp_path):
         assert list(db.iterdump()) == before
 
 
+@pytest.mark.parametrize("relative", [
+    "sources\\fixture.json", "sources/../fixture.json", "sources/./fixture.json",
+    "sources//fixture.json", "/sources/fixture.json", "sources/file:stream",
+])
+def test_import_source_path_requires_canonical_portable_relative_path(tmp_path, relative):
+    from paperforge.result_ledger import _imported_metric_snapshots
+
+    service, _, materialized, _ = imported_metric(tmp_path)
+    eid = materialized["evidence_ids"][0]
+    with service.memory.connect() as db:
+        row = dict(db.execute("SELECT * FROM evidence WHERE id=?", (eid,)).fetchone())
+    metadata = json.loads(row["metadata_json"])
+    metadata["source_relpath"] = relative
+    with pytest.raises(LedgerError, match="invalid imported metric source path"):
+        _imported_metric_snapshots(tmp_path, service.memory, eid, row, metadata,
+                                   ResultLedgerQuery(evidence_ids=(eid,)))
+
+
 @pytest.mark.parametrize("role", ["fixture", "synthetic_test"])
 def test_fixture_import_does_not_receive_scientific_approval(tmp_path, role):
     service, record, validation, _ = imported_metric(tmp_path, role=role)

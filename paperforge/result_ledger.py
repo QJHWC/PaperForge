@@ -370,11 +370,13 @@ def _imported_metric_snapshots(
     base = root / ".paperforge" / "imports" / import_id
     manifest_path = reject_symlink_components(base / "manifest.json", anchor=root)
     manifest = json.loads(manifest_path.read_bytes())
-    source_relative = Path(str(metadata.get("source_relpath") or ""))
+    raw_source_relative = str(metadata.get("source_relpath") or "")
+    source_relative = Path(raw_source_relative)
     if (source_relative.is_absolute() or len(source_relative.parts) != 2
             or source_relative.parts[0] != "sources"
             or any(p in {".", ".."} for p in source_relative.parts)
-            or "\\" in str(source_relative)):
+            or "\\" in raw_source_relative or ":" in raw_source_relative
+            or raw_source_relative != source_relative.as_posix()):
         raise LedgerError("invalid imported metric source path")
     source = reject_symlink_components(base / source_relative, anchor=root)
     source_bytes = source.read_bytes()

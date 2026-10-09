@@ -121,7 +121,7 @@ def apply_patch(
         raise UnsupportedMultiFileEdit(f"received {len(extra_targets) + 1} targets")
     root = Path(workspace).expanduser().resolve(strict=True)
     target_path, relative = _resolve_target(root, target)
-    original = target_path.read_text(encoding="utf-8")
+    original = target_path.read_bytes().decode("utf-8")
     actual_sha = hashlib.sha256(original.encode("utf-8")).hexdigest()
     if actual_sha != source_sha256:
         raise PatchSafetyError(
@@ -237,7 +237,7 @@ def apply_patch(
     atomic_write_text(root, relative, candidate if candidate.endswith("\n") else candidate + "\n")
     written = root / relative
     try:
-        after_hash = protected_blocks_sha256(written.read_text(encoding="utf-8"))
+        after_hash = protected_blocks_sha256(written.read_bytes().decode("utf-8"))
         if after_hash != before_hash:
             raise PatchSafetyError("protected hash changed after patch")
         store = ArtifactStore(

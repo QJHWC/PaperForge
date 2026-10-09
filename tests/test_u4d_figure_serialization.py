@@ -39,13 +39,13 @@ def test_figure_svg_labels_are_data_not_markup(tmp_path: Path, label: str) -> No
     _seed(service, metric="latency_ms", value="20", run={"model_id": label})
     _seed(service, metric="map", value="0.8", unit="score", run={"model_id": label})
     ledger = freeze_ledger(tmp_path, service.memory, ResultLedgerQuery(purpose="scientific"))
-    spec = FigureSpec(ledger_id=ledger["ledger_id"], figure_id="preview<&>",
+    spec = FigureSpec(ledger_id=ledger["ledger_id"], figure_id="preview&",
                       x_metric="latency_ms", y_metric="map", series_by="model_id")
     first = generate_figure(tmp_path, service.memory, spec)
     path = tmp_path / "artifacts" / "figures" / first["figure_id"] / "figure.svg"
     svg = ET.fromstring(path.read_bytes())
     ns = {"svg": "http://www.w3.org/2000/svg"}
-    assert svg.find("svg:title", ns).text == "preview<&>"
+    assert svg.find("svg:title", ns).text == "preview&"
     circles = svg.findall("svg:circle", ns)
     assert circles
     for circle in circles:

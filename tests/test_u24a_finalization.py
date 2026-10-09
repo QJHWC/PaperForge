@@ -39,7 +39,7 @@ def _spec_with_table(tmp_path: Path, block: str, table_id: str = "table-1"):
     store.register(f"artifacts/tables/{table_id}/manifest.json", kind="manifest")
     tex = tmp_path / "paper.tex"
     tex.write_text(_doc("Intro.", block), encoding="utf-8")
-    text = tex.read_text(encoding="utf-8")
+    text = tex.read_bytes().decode("utf-8")
     old_block = extract_protected_blocks(text)[0]
     spec = ResultUpdateSpec(
         target_path="paper.tex", target_source_sha256=hashlib.sha256(text.encode()).hexdigest(),
@@ -95,7 +95,7 @@ def test_structural_numbers_ignored(tmp_path: Path) -> None:  # F2-1,2
     block = "See Table III and Eq. (7). Old result 20.0 ms."
     tex = tmp_path / "paper.tex"
     tex.write_text(_doc("Intro.", block), encoding="utf-8")
-    text = tex.read_text(encoding="utf-8")
+    text = tex.read_bytes().decode("utf-8")
     old = extract_protected_blocks(text)[0]
     spec = ResultUpdateSpec(target_path="paper.tex",
                             target_source_sha256=hashlib.sha256(text.encode()).hexdigest(),
@@ -113,7 +113,7 @@ def test_protocol_changes_require_binding(tmp_path: Path) -> None:  # F2-3,4,5
     block = "Trained 300 epochs on 896 px with 3 seeds. Old result 20.0 ms."
     tex = tmp_path / "paper.tex"
     tex.write_text(_doc("Intro.", block), encoding="utf-8")
-    text = tex.read_text(encoding="utf-8")
+    text = tex.read_bytes().decode("utf-8")
     old = extract_protected_blocks(text)[0]
     spec = ResultUpdateSpec(target_path="paper.tex",
                             target_source_sha256=hashlib.sha256(text.encode()).hexdigest(),
@@ -129,7 +129,7 @@ def test_protocol_binding_passes(tmp_path: Path) -> None:  # F2-6
     block = "Trained 300 epochs. Old result 20.0 ms."
     tex = tmp_path / "paper.tex"
     tex.write_text(_doc("Intro.", block), encoding="utf-8")
-    text = tex.read_text(encoding="utf-8")
+    text = tex.read_bytes().decode("utf-8")
     old = extract_protected_blocks(text)[0]
     spec = ResultUpdateSpec(
         target_path="paper.tex", target_source_sha256=hashlib.sha256(text.encode()).hexdigest(),
@@ -147,7 +147,7 @@ def test_reconcile_matrix(tmp_path: Path) -> None:  # F3
     block = "Old result 20.0 ms."
     tex = tmp_path / "paper.tex"
     tex.write_text(_doc("Intro.", block), encoding="utf-8")
-    text = tex.read_text(encoding="utf-8")
+    text = tex.read_bytes().decode("utf-8")
     old = extract_protected_blocks(text)[0]
     spec = ResultUpdateSpec(target_path="paper.tex",
                             target_source_sha256=hashlib.sha256(text.encode()).hexdigest(),
@@ -162,7 +162,7 @@ def test_reconcile_matrix(tmp_path: Path) -> None:  # F3
     # C: simulate APPLYING + new without DB commit.
     with service.memory.connect() as db:
         db.execute("UPDATE result_updates SET state='APPLYING' WHERE id=?", (prop["proposal_id"],))
-    (tmp_path / "paper.tex").write_text(text.replace(old, old.replace("20.0", "22.4")), encoding="utf-8")
+    (tmp_path / "paper.tex").write_bytes(text.replace(old, old.replace("20.0", "22.4")).encode("utf-8"))
     report2 = reconcile_result_updates(tmp_path, service.memory)
     assert any("RECOVERABLE_FORWARD" in f["verdict"] for f in report2["findings"])
     # Manual: neither old nor new.

@@ -31,7 +31,7 @@ def _spec(tmp_path: Path, block: str = "Old result 20.0 ms.", **overrides) -> tu
     service = PaperForgeService(tmp_path)
     tex = tmp_path / "paper.tex"
     tex.write_text(_doc("Intro.", block), encoding="utf-8")
-    text = tex.read_text(encoding="utf-8")
+    text = tex.read_bytes().decode("utf-8")
     old_block = extract_protected_blocks(text)[0]
     base = {
         "target_path": "paper.tex",
@@ -137,12 +137,12 @@ def test_approval_binding_and_invalidation(tmp_path: Path) -> None:  # 15,16,17,
 
 def test_apply_single_block_and_hashes(tmp_path: Path) -> None:  # 19,20,21
     service, spec, old = _spec(tmp_path)
-    before = (tmp_path / "paper.tex").read_text()
+    before = (tmp_path / "paper.tex").read_bytes().decode("utf-8")
     prop = build_proposal(tmp_path, service.memory, spec, proposed_block=old.replace("20.0", "22.4"),
                           facts_used=[_fact()])
     approve_proposal(tmp_path, service.memory, prop["proposal_id"], approver="local-owner")
     out = apply_proposal(tmp_path, service.memory, prop["proposal_id"])
-    after = (tmp_path / "paper.tex").read_text()
+    after = (tmp_path / "paper.tex").read_bytes().decode("utf-8")
     assert "22.4" in after and out["new_block_sha256"]
     assert after.replace(out["new_block_sha256"], "") is not None
     assert before.replace(old, "") == after.replace(old.replace("20.0", "22.4"), "")  # 20
@@ -192,7 +192,7 @@ def test_ledger_stale_blocks_approve_and_apply(tmp_path: Path) -> None:  # 16,17
         purpose="scientific", metric_names=["latency_ms"], evidence_ids=(eid,)))
     tex = tmp_path / "paper.tex"
     tex.write_text(_doc("Intro.", "Old result 20.0 ms."), encoding="utf-8")
-    text = tex.read_text(encoding="utf-8")
+    text = tex.read_bytes().decode("utf-8")
     from paperforge.protected_blocks import extract_protected_blocks as _ex
 
     old_block = _ex(text)[0]

@@ -387,7 +387,7 @@ def build_proposal(
     """Create a proposal without touching the target file."""
     root = Path(workspace).expanduser().resolve(strict=True)
     target = _resolve_target(root, spec.target_path)
-    current_text = target.read_text(encoding="utf-8")
+    current_text = target.read_bytes().decode("utf-8")
     current_sha = _sha256_str(current_text)
     if current_sha != spec.target_source_sha256:
         raise ResultUpdateValidationError("target source changed (stale source hash)")
