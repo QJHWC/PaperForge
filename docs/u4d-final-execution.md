@@ -130,3 +130,18 @@ The earlier U4C/U4D-Prep reports are historical evidence, not current gate resul
   fixed-temp symlink overwrite in ResultUpdate proposal/spec/validation writes.
   This is a push blocker and is next to repair. Remote review and paper revision
   have not started; the overall goal remains active.
+
+## Operation write safety checkpoint (2026-10-09)
+
+- ResultUpdate prevalidates all proposal members and legacy temporary paths;
+  external imports validate IDs and member paths. Both use random atomic writes.
+- Eight red-first regressions preserve outside sentinel bytes and existing state
+  on unsafe output or temporary paths. Related recovery tests: **35 passed**.
+- Independent review approved the scoped repair and fixture-only smoke;
+  independent related tests: **29 passed**, Ruff PASS.
+- Full regression: **760 collected, 755 passed, 5 skipped, 0 failed, 0 errors**;
+  Ruff PASS; configured mypy PASS (80 files). The five real-compute opt-in skips
+  and five SWIG warnings remain as previously documented.
+- A9 remains open: SVG attribute serialization, invalid preview PDF bytes, and
+  dynamically constructed LaTeX file commands still require repair. No push,
+  remote review, tool freeze, or real-paper revision has occurred.

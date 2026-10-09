@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import re
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -11,7 +12,13 @@ from typing import Any
 
 from .evidence_semantics import EvidenceSemantics, EvidenceSemanticsError
 from .models import utc_now
-from .path_safety import reject_symlink_components, safe_mkdir
+from .path_safety import (
+    atomic_write_bytes,
+    atomic_write_text,
+    reject_symlink_components,
+    safe_mkdir,
+    safe_output_path,
+)
 
 IMPORT_SCHEMA = "paperforge.external-import/v1"
 
@@ -150,7 +157,7 @@ def stage_import(
             stem, suffix = Path(filename).stem, Path(filename).suffix
             target = sources_dir / f"{stem}-{counter}{suffix}"
             counter += 1
-        target.write_bytes(data)
+        atomic_write_bytes(root, target.relative_to(root), data)
         sha = hashlib.sha256(data).hexdigest()
         suffix = Path(target.name).suffix.lower()
         media = {
@@ -182,10 +189,8 @@ def stage_import(
     manifest_bytes = _canonical_json(manifest)
     manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
     manifest_path = import_root / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    atomic_write_text(root, manifest_path.relative_to(root),
+                      json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     validation = {
         "schema": "paperforge.external-import.validation/v1",
         "import_id": import_id,
@@ -196,10 +201,8 @@ def stage_import(
         "detail": "staged only; validation and approval arrive in U2.2",
     }
     validation_path = import_root / "validation.json"
-    validation_path.write_text(
-        json.dumps(validation, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    atomic_write_text(root, validation_path.relative_to(root),
+                      json.dumps(validation, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     _ensure_imports_table(memory)
     with memory.connect() as db:
         db.execute(
@@ -303,7 +306,11 @@ def _ensure_u22_tables(memory: Any) -> None:
 
 
 def _import_paths(root: Path, import_id: str) -> tuple[Path, Path, Path]:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", import_id):
+        raise ImportSafetyError("invalid import identifier")
     base = root / ".paperforge" / "imports" / import_id
+    for name in ("manifest.json", "validation.json", "sources"):
+        reject_symlink_components(base / name, anchor=root)
     return base / "manifest.json", base / "validation.json", base / "sources"
 
 
@@ -606,10 +613,11 @@ def validate_import(workspace: str | Path, memory: Any, import_id: str) -> dict[
         "created_at": utc_now(),
         "validated_at": utc_now(),
     }
-    # Deterministic atomic write (temp + replace) for crash safety.
+    # Retain suspicious legacy temp paths; use an exclusive random temp for writes.
     tmp_path = validation_path.with_name(f".{validation_path.name}.{import_id}.tmp")
-    tmp_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp_path.replace(validation_path)
+    safe_output_path(root, tmp_path.relative_to(root))
+    atomic_write_text(root, validation_path.relative_to(root),
+                      json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     state = "validated" if overall in {"passed", "needs_human"} else "validation_failed"
     with memory.connect() as db:
         db.execute(

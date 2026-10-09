@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import utc_now
-from .path_safety import atomic_write_text, reject_symlink_components, safe_mkdir
+from .path_safety import atomic_write_text, reject_symlink_components, safe_mkdir, safe_output_path
 from .protected_blocks import (
     PROTECTED_END,
     PROTECTED_START,
@@ -366,6 +366,8 @@ def _ensure_update_tables(memory: Any) -> None:
 
 
 def _update_paths(root: Path, proposal_id: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", proposal_id):
+        raise ResultUpdateValidationError("invalid proposal identifier")
     return safe_mkdir(root / ".paperforge" / "result_updates" / proposal_id, anchor=root)
 
 
@@ -495,12 +497,14 @@ def build_proposal(
     proposal = {**stable, "proposal_id": proposal_id, "proposal_digest": digest,
                 "validation": validation, "created_at": utc_now()}
     base = _update_paths(root, proposal_id)
-    for name, content in (("spec.json", spec.to_canonical()), ("proposal.json", proposal),
-                          ("validation.json", validation)):
-        target_path = base / name
-        tmp = target_path.with_name(f".{name}.tmp")
-        tmp.write_text(json.dumps(content, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        tmp.replace(target_path)
+    contents = {"spec.json": spec.to_canonical(), "proposal.json": proposal,
+                "validation.json": validation}
+    for name in contents:
+        safe_output_path(root, (base / name).relative_to(root))
+        safe_output_path(root, (base / f".{name}.tmp").relative_to(root))
+    for name, content in contents.items():
+        atomic_write_text(root, (base / name).relative_to(root),
+                          json.dumps(content, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     _ensure_update_tables(memory)
     with memory.connect() as db:
         db.execute(
