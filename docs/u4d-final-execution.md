@@ -5,6 +5,12 @@ branch `feature/u4c-reliability`. This is a running evidence log, not a completi
 certificate. The full batch includes the subsequent PCB paper revision; completing
 U4D alone must not close the overall goal.
 
+Current remote checkpoint: first authorized push `f7d8dd7` is under review in
+[PR #3](https://github.com/QJHWC/PaperForge/pull/3). It is **not frozen**: code
+review found seven valid blockers and CI exposed renderer and Windows defects.
+Local repairs pass; fresh remote verification is pending (see below). Earlier local
+approval is historical evidence, not a claim that remote review found no defects.
+
 ## Authorization and order
 
 The batch owner authorizes isolated Python 3.11 dependency installation, source and
@@ -23,7 +29,7 @@ of unpublished materials, paid resources, sudo, or system Python 3.14.
 | Requirements | Evidence required | Current state |
 |---|---|---|
 | A1 environment | Interpreter/venv/pip and declared dependency inspection | PASS; isolated Python 3.11.15, pip check clean |
-| A2 full tests | Full pytest, counts and failure classification | PASS; 778 passed, 5 opt-in skips, 0 failures/errors |
+| A2 full tests | Full pytest, counts and failure classification | PASS; 819 passed, 5 opt-in skips, 0 failures/errors |
 | A3-A4 static | Existing Ruff whole-repository and mypy paperforge scope pass | PASS; Ruff ., mypy 81 files |
 | A5 integration | End-to-end synthetic evidence-to-status FinalSmokeReport and negative boundaries | PASS; no real human approval/release |
 | A6 reliability | ResultUpdate, actual kill/reopen, import reopen, split-brain | PASS_WITH_LIMITATIONS; all 69 U4C tests retained |
@@ -208,3 +214,59 @@ local review, not a full historical-repository certification or remote review.
   push is the next action. This is not tool freeze, remote review clearance,
   merge authorization, scientific acceptance or publication release.
 - Remote automatic code/security reviews and all real-paper phases remain open.
+
+## First push and remote-review repair loop (2026-10-09)
+
+- Pushed and remotely verified exact SHA
+  `f7d8dd70c1fb9ff0f44e796305cce2991879f940`; PR #3 created and attached.
+  No merge occurred. Both Codex review requests were explicitly triggered after
+  inspecting initial remote activity; the summary identifies them as manual
+  requests. Copilot's separate quota refusal is not a review pass.
+- Read all seven Codex inline findings, not just completed state: six P1 and one
+  P2. Each is a valid correctness/approval/currentness blocker. Findings:
+  fact source semantics omitted; incomplete figure run-identity pairing; unchecked
+  ledger consumption; repeated old numbers bypass binding; missing artifact
+  members ignored; pending human records count as completed coverage; changed
+  target PDF still reports current. Four were also independently reproduced by
+  the local reviewer in temporary fixtures.
+- [Security review](https://github.com/QJHWC/PaperForge/pull/3#issuecomment-6078423453)
+  explicitly reports no security issues for `f7d8dd7`. This does not overrule the
+  seven code findings and does not certify subsequent commits.
+- Linux Python 3.11 CI: 755 passed, 7 platform/opt-in skips, 21 failures, all
+  missing `pdftoppm`. macOS 3.11: 757 passed, 5 skips, same 21 failures. The real
+  compute CI job completed successfully. Windows Python 3.11 subsequently finished
+  with 689 passed, 18 skips, 76 failures: missing Poppler plus actual byte/newline
+  and portable-path defects. These are not all environment failures.
+- Local commit `4506b8b` provisions Poppler on all three CI platforms and runs a
+  renderer preflight. Windows uses a fixed third-party Poppler packaging release
+  with a verified pinned SHA-256, not a claim of an upstream official build.
+  Independent config review approved; actual CI installation is still unverified.
+- Added 32 red-first regressions for the seven code findings. Current local
+  repair run: **815 collected, 810 passed, 5 skipped, 0 failed, 0 errors**;
+  Ruff PASS; configured mypy PASS (81 files). Publication, update and PDF repairs
+  independently reviewed and approved locally. No second push yet.
+- Tool freeze and real-paper phases remain pending. The next pushed SHA must
+  receive fresh code and security reviews; first-push results cannot be reused.
+
+## Cross-platform byte integrity repair (2026-10-09)
+
+- Windows CI exposed source hashes computed after universal-newline normalization.
+  Prose patch and ResultUpdate now decode the actual source bytes. Test approval
+  fixtures likewise bind actual bytes; outside-block equality remains exact.
+- Independent review reproduced an additional source-corruption bug: text-mode
+  temporary writes turn existing CRLF into CRCRLF on Windows, including rollback.
+  The shared atomic text writer now encodes explicitly and reuses the byte writer.
+  Windows-default newline simulation reproduced both real entrypoint failures
+  before repair; CRLF patch/apply and failed-registration rollback preserve bytes.
+- Imported source paths are validated against their raw canonical POSIX spelling,
+  not Windows-native backslash rendering. Six negative cases retain traversal,
+  noncanonical and alternate-stream rejection. SVG tests use a portable ID while
+  retaining quotes/angle-brackets/ampersands in adversarial series labels.
+- These repairs require the next real Windows CI run. Local OS success and the
+  focused newline simulation alone are not Windows certification.
+- Latest local run: **824 collected, 819 passed, 5 skipped, 0 failed, 0 collection
+  errors**, with the same five SWIG warnings. Whole-repository Ruff and configured
+  mypy (81 files) pass. Rebuilt sdist/wheel and official isolated wheel smoke pass.
+- Independent scoped review approved: 52 tests, changed-file Ruff and configured
+  mypy pass; no remaining HIGH/CRITICAL within this repair. Local push readiness
+  is restored, but no remote clearance or tool freeze is claimed.
