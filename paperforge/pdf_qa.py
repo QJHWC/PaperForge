@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import utc_now
-from .path_safety import safe_mkdir
+from .path_safety import UnsafePathError, reject_symlink_components, safe_mkdir
 
 QA_SPEC_SCHEMA = "paperforge.pdf-qa-spec/v1"
 QA_POLICY_SCHEMA = "paperforge.pdf-qa-policy/v1"
@@ -101,7 +101,7 @@ def _canonical(payload: Mapping[str, Any]) -> bytes:
 
 
 def _resolve_pdf(root: Path, rel: str) -> Path:
-    candidate = (root / rel).resolve()
+    candidate = reject_symlink_components(root / rel, anchor=root).resolve()
     try:
         candidate.relative_to(root)
     except ValueError as exc:
@@ -490,7 +490,8 @@ def run_pdf_qa(
     critical = [i for i in issues if i.get("severity") == "critical" and i.get("status") == "open"]
     needs_human = [i for i in issues if i.get("status") == "needs_human"]
     pages = {r["page"] for r in renders}
-    reviewed_any = {r.get("page") for r in human_records if not r.get("stale")}
+    reviewed_any = {r.get("page") for r in human_records if not r.get("stale")
+                    and r.get("status") in {"passed", "passed_with_warnings"}}
     if critical or any(r.get("status") == "failed" for r in human_records):
         state = "failed"
     elif needs_human or pages - reviewed_any:
@@ -554,7 +555,10 @@ def verify_pdf_qa(workspace: str | Path, memory: Any, bundle_id: str) -> dict[st
     from pathlib import Path as _Path
 
     root = _Path(workspace).expanduser().resolve(strict=True)
-    bundle_path = root / ".paperforge" / "pdf_qa" / bundle_id / "qa.json"
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", bundle_id):
+        raise PdfQaError("unsafe QA bundle ID")
+    bundle_path = reject_symlink_components(
+        root / ".paperforge" / "pdf_qa" / bundle_id / "qa.json", anchor=root)
     if not bundle_path.is_file():
         raise PdfQaError(f"QA bundle missing: {bundle_id}")
     raw = bundle_path.read_bytes()
@@ -566,9 +570,22 @@ def verify_pdf_qa(workspace: str | Path, memory: Any, bundle_id: str) -> dict[st
     stored = str(payload.get("qa_digest") or "")
     stable = {k: payload[k] for k in payload if k not in {"bundle_id", "qa_digest", "created_at", "qa_file_sha256"}}
     digest_valid = stored == hashlib.sha256(_canonical(stable)).hexdigest()
-    # Target PDF still matches?
-    target_match = True
-    historical = "valid" if digest_valid else "invalid"
+    # The immutable spec binds the target path; historical QA does not imply
+    # that today's PDF is still the reviewed file.
+    spec_valid = False
+    target_match = False
+    spec_payload: dict[str, Any] = {}
+    try:
+        spec_path = reject_symlink_components(bundle_path.with_name("spec.json"), anchor=root)
+        spec_payload = json.loads(spec_path.read_bytes())
+        spec_valid = isinstance(spec_payload, dict) and (
+            hashlib.sha256(_canonical(spec_payload)).hexdigest() == payload.get("spec_digest"))
+        if spec_valid:
+            target = _resolve_pdf(root, str(spec_payload.get("target_pdf_path") or ""))
+            target_match = hashlib.sha256(target.read_bytes()).hexdigest() == payload.get("target_pdf_sha256")
+    except (OSError, ValueError, TypeError, PdfQaError, UnsafePathError):
+        target_match = False
+    historical = "valid" if digest_valid and spec_valid else "invalid"
     # Human/render currentness sampled from stored hashes (no recomputation of renders here).
     unresolved_critical = list(payload.get("unresolved_critical") or [])
     state = str(payload.get("layout_qa_state") or "")
@@ -577,7 +594,7 @@ def verify_pdf_qa(workspace: str | Path, memory: Any, bundle_id: str) -> dict[st
     registry = verify_registered_bundle(root, memory, {
         f".paperforge/pdf_qa/{bundle_id}/qa.json": "review",
         f".paperforge/pdf_qa/{bundle_id}/manifest.json": "manifest"})
-    currently_valid = bool(historical == "valid" and registry["registered_complete"])
+    currently_valid = bool(historical == "valid" and target_match and registry["registered_complete"])
     return {
         **registry,
         "bundle_id": bundle_id,
@@ -585,10 +602,10 @@ def verify_pdf_qa(workspace: str | Path, memory: Any, bundle_id: str) -> dict[st
         "bundle_file_integrity": "valid",
         "qa_digest_valid": digest_valid,
         "target_pdf_hash_match": target_match,
-        "build_currentness": True,
-        "policy_match": True,
-        "render_currentness": "current",
-        "human_review_currentness": "current",
+        "build_currentness": target_match and spec_valid,
+        "policy_match": spec_valid and spec_payload.get("qa_policy") == payload.get("qa_policy"),
+        "render_currentness": "current" if currently_valid else "stale",
+        "human_review_currentness": "current" if currently_valid else "stale",
         "unresolved_critical": unresolved_critical,
         "unresolved_warnings": list(payload.get("unresolved_warnings") or []),
         "page_coverage_complete": bool(payload.get("page_coverage_complete")),
@@ -596,7 +613,8 @@ def verify_pdf_qa(workspace: str | Path, memory: Any, bundle_id: str) -> dict[st
         "currently_valid": currently_valid,
         "layout_qa_state": state,
         "eligible_as_layout_qa_input": currently_valid,
-        "warnings": [] if historical == "valid" else ["QA file or digest mismatch"],
+        "warnings": ([] if historical == "valid" else ["QA file/spec or digest mismatch"])
+                    + ([] if target_match else ["target PDF is missing, unsafe, or changed"]),
     }
 
 
