@@ -4,6 +4,7 @@ import difflib
 import hashlib
 import json
 import re
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -228,11 +229,13 @@ def _collect_artifact_hashes(root: Path, spec: ResultUpdateSpec) -> dict[str, di
     """Hash every real file byte under bound artifacts (ID alone never binds)."""
     collected: dict[str, dict[str, str]] = {}
     for key, directory in _artifact_directories(root, spec).items():
+        reject_symlink_components(directory, anchor=root)
         if not directory.is_dir():
             raise ResultUpdateValidationError(f"bound artifact missing: {key}")
         files: dict[str, str] = {}
         for child in sorted(directory.rglob("*")):
-            if child.is_symlink() or not child.is_file():
+            reject_symlink_components(child, anchor=root)
+            if not child.is_file():
                 continue
             rel = child.relative_to(directory).as_posix()
             files[rel] = hashlib.sha256(child.read_bytes()).hexdigest()
@@ -249,6 +252,11 @@ def verify_bound_artifact_integrity(
     """Verify real file bytes + ArtifactStore records + manifest consistency."""
     root = Path(workspace).expanduser().resolve(strict=True)
     current = _collect_artifact_hashes(root, spec)
+    if expected is not None and (set(current) != set(expected) or any(
+            not isinstance(expected[key], Mapping) or set(files) != set(expected[key])
+            for key, files in current.items()
+    )):
+        raise ResultUpdateApprovalError("bound artifact member set changed")
     results: list[dict[str, Any]] = []
     with memory.connect() as db:
         for key, files in current.items():
@@ -417,9 +425,14 @@ def build_proposal(
     protocol_allow = {(str(p.get("name") or "").strip().lower(), str(p.get("unit") or "").strip().lower()): dict(p)
                       for p in spec.allowed_protocol_values}
     old_classified = _classify_candidates(old_block)
-    old_texts = {c["text"] for c in old_classified if c["kind"] in {"metric", "protocol"}}
+    old_occurrences = Counter((c["kind"], c["text"]) for c in old_classified
+                              if c["kind"] in {"metric", "protocol"})
     for cand in _classify_candidates(proposed_block):
-        if cand["kind"] == "structural" or cand["text"] in old_texts:
+        if cand["kind"] == "structural":
+            continue
+        occurrence_key = (cand["kind"], cand["text"])
+        if old_occurrences[occurrence_key] > 0:
+            old_occurrences[occurrence_key] -= 1
             continue
         if cand["kind"] == "metric":
             matched = None
