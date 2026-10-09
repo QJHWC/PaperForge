@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from .path_safety import atomic_write_bytes, safe_output_path
+from .path_safety import atomic_write_bytes, reject_symlink_components, safe_output_path
 
 TABLE_GENERATOR_VERSION = "paperforge.table-generator/v1"
 FIGURE_GENERATOR_VERSION = "paperforge.figure-generator/v2"
-FACT_GENERATOR_VERSION = "paperforge.fact-generator/v1"
+FACT_GENERATOR_VERSION = "paperforge.fact-generator/v2"
 
 _BANNED_FACT_WORDS = (
     "statistically significant", "equivalent", "robust",
@@ -256,11 +256,22 @@ class FactSummarySpec:
         return _spec_digest(self.to_canonical())
 
 
-def _load_ledger(root: Path, ledger_id: str) -> dict[str, Any]:
-    path = root / ".paperforge" / "ledgers" / ledger_id / "ledger.json"
+def _load_ledger(root: Path, memory: Any, ledger_id: str) -> dict[str, Any]:
+    from .result_ledger import verify_ledger
+
+    _bundle_path("ledgers", ledger_id)
+    relative = Path(".paperforge") / "ledgers" / ledger_id
+    path = reject_symlink_components(root / relative / "ledger.json", anchor=root)
+    reject_symlink_components(root / relative / "manifest.json", anchor=root)
     if not path.is_file():
         raise PublicationArtifactError(f"ledger missing: {ledger_id}")
-    return json.loads(path.read_bytes().decode("utf-8"))
+    verification = verify_ledger(root, memory, ledger_id)
+    if not verification.get("eligible_as_release_input"):
+        raise PublicationArtifactError(f"ledger integrity/currentness invalid: {ledger_id}")
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != verification.get("ledger_file_sha256"):
+        raise PublicationArtifactError(f"ledger changed during validation: {ledger_id}")
+    return json.loads(data.decode("utf-8"))
 
 
 def _ledger_rows(ledger: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -294,7 +305,7 @@ def generate_table(
     workspace: str | Path, memory: Any, spec: TableSpec, *, run_id: str | None = None
 ) -> dict[str, Any]:
     root = Path(workspace).expanduser().resolve(strict=True)
-    ledger = _load_ledger(root, spec.ledger_id)
+    ledger = _load_ledger(root, memory, spec.ledger_id)
     rows = _ledger_rows(ledger)
     by_id = {str(r.get("row_id")): r for r in rows}
     selected = [by_id[rid] for rid in spec.row_ids if rid in by_id] if spec.row_ids else list(rows)
@@ -405,7 +416,7 @@ def generate_figure(
     workspace: str | Path, memory: Any, spec: FigureSpec, *, run_id: str | None = None
 ) -> dict[str, Any]:
     root = Path(workspace).expanduser().resolve(strict=True)
-    ledger = _load_ledger(root, spec.ledger_id)
+    ledger = _load_ledger(root, memory, spec.ledger_id)
     rows = _ledger_rows(ledger)
     # Filters: exact match on run_identity fields + metric presence.
     points: list[dict[str, Any]] = []
@@ -422,14 +433,17 @@ def generate_figure(
     for y in sorted(y_rows, key=lambda r: str(r.get("row_id"))):
         identity = dict(y.get("run_identity") or {})
         group = str(identity.get(spec.series_by) or y.get("measurement_kind") or "default")
-        # Find matching x with same model/seed/device (excluding metric).
-        match = next((
+        # Never join observations across unlisted run dimensions or layers.
+        matches = [
             x for x in x_rows
-            if all(str((dict(x.get("run_identity") or {})).get(k) or "") == str(identity.get(k) or "")
-                   for k in ("model_id", "seed", "device_id", "precision", "input_size"))
-        ), None)
-        if match is None:
+            if dict(x.get("run_identity") or {}) == identity
+            and x.get("measurement_kind") == y.get("measurement_kind")
+        ]
+        if not matches:
             continue
+        if len(matches) != 1:
+            raise PublicationArtifactError(f"ambiguous x observations for y row {y.get('row_id')}")
+        match = matches[0]
         series.setdefault(group, []).append({
             "x": str(match.get("value_str")), "y": str(y.get("value_str")),
             "x_row_id": str(match.get("row_id")), "y_row_id": str(y.get("row_id")),
@@ -486,11 +500,25 @@ def generate_figure(
     return {"figure_id": figure_id, "spec_digest": spec_digest, "manifest": manifest}
 
 
+def _fact_source_metadata(row: Mapping[str, Any], qualifiers: Mapping[str, Any]) -> dict[str, Any]:
+    identity = dict(row.get("run_identity") or {})
+    bound = {key: value for key, value in identity.items() if key != "schema"}
+    bound["measurement_kind"] = str(row.get("measurement_kind") or "")
+    for alias, canonical in {"dataset": "dataset_id", "split": "split_sha256",
+                             "checkpoint": "checkpoint_sha256", "device": "device_id"}.items():
+        bound[alias] = identity.get(canonical, "")
+    for key, value in qualifiers.items():
+        if key in bound and str(value) != str(bound[key]):
+            raise PublicationArtifactError(f"fact qualifier conflicts with source identity: {key}")
+    return {"run_identity": identity, "measurement_kind": bound["measurement_kind"],
+            "qualifiers": {**dict(qualifiers), **bound}}
+
+
 def generate_facts(
     workspace: str | Path, memory: Any, spec: FactSummarySpec, *, run_id: str | None = None
 ) -> dict[str, Any]:
     root = Path(workspace).expanduser().resolve(strict=True)
-    ledger = _load_ledger(root, spec.ledger_id)
+    ledger = _load_ledger(root, memory, spec.ledger_id)
     rows = {str(r.get("row_id")): r for r in _ledger_rows(ledger)}
     for text in (spec.fact_id,):
         for banned in _BANNED_FACT_WORDS:
@@ -511,6 +539,7 @@ def generate_facts(
             "lineage": row.get("lineage"),
             "presentation_hint": None,
         }
+        fact.update(_fact_source_metadata(row, spec.qualifiers))
     elif spec.kind == "delta":
         base, compare = rows.get(spec.base_row_id), rows.get(spec.compare_row_id)
         if base is None or compare is None:
@@ -519,6 +548,12 @@ def generate_facts(
             raise PublicationArtifactError("delta requires same metric/unit")
         if base.get("value_str") is None or compare.get("value_str") is None:
             raise PublicationArtifactError("delta requires present values")
+        base_identity = dict(base.get("run_identity") or {})
+        compare_identity = dict(compare.get("run_identity") or {})
+        dimensions = (set(base_identity) | set(compare_identity)) - {"model_id", "checkpoint_sha256"}
+        if (base.get("measurement_kind") != compare.get("measurement_kind")
+                or any(base_identity.get(k) != compare_identity.get(k) for k in dimensions)):
+            raise PublicationArtifactError("delta requires compatible run identity and evidence layer")
         delta = Decimal(str(base["value_str"])) - Decimal(str(compare["value_str"]))
         fact = {
             "fact_id": spec.fact_id or f"fact-delta-{hashlib.sha256((spec.base_row_id + spec.compare_row_id).encode()).hexdigest()[:12]}",
@@ -533,6 +568,8 @@ def generate_facts(
             "lineage": [base.get("lineage"), compare.get("lineage")],
             "presentation_hint": None,
         }
+        fact.update(_fact_source_metadata(base, spec.qualifiers))
+        fact["source_run_identities"] = [base_identity, compare_identity]
     elif spec.kind in {"aggregation", "provenance"}:
         row = rows.get(spec.row_id)
         if row is None:
@@ -545,6 +582,7 @@ def generate_facts(
             "evidence_ids": list(row.get("source_evidence_ids") or []),
             "lineage": row.get("lineage"), "presentation_hint": None,
         }
+        fact.update(_fact_source_metadata(row, spec.qualifiers))
     else:
         raise PublicationArtifactError(f"unknown fact kind: {spec.kind}")
     spec_digest = spec.digest()
