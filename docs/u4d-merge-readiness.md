@@ -1,5 +1,23 @@
 # U4D merge/release readiness preparation
 
+## Current update: 2026-10-09
+
+U4D Final is now in progress under the owner's batch authorization. The isolated
+Python 3.11 environment closes the earlier dependency blocker: **778 passed,
+5 opt-in skips, 0 failures/collection errors**, Ruff PASS, configured mypy PASS
+(81 files). Final integration and reliability smoke pass with the documented
+single-writer/controlled-termination limitations. Scoped local A9 review has no
+open reproduced HIGH/CRITICAL. Build, official wheel smoke and hygiene checks
+pass. Local status is **PUSH_READY_WITH_DOCUMENTED_LIMITATIONS**.
+
+No push, remote automatic review, tool freeze or real-paper revision is claimed
+yet. Follow the live [execution/handoff log](u4d-final-execution.md) and
+[FinalSmokeReport](u4d-final-smoke.md), not the historical blocked counts below.
+Push is conditionally authorized only after all local gates; each push still
+requires both exact-commit automatic reviews. Merge remains unauthorized.
+
+## Historical U4D-Prep inventory (unchanged evidence)
+
 Inventory date: 2026-09-27. This is **U4D-Prep**, not final merge approval,
 publication authorization, or a release announcement.
 

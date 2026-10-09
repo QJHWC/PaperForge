@@ -1,5 +1,13 @@
 # U4C reliability maintenance
 
+Current follow-up (2026-10-09): the U4D isolated Python 3.11 environment has
+resolved the missing-dependency/static-tool debt recorded below. Latest full
+suite: 778 passed, 5 opt-in compute skips, 0 failures/errors; Ruff/mypy pass.
+All 69 U4C tests remain passing. This does not expand the reliability guarantees:
+single-writer, quiesced repair and controlled termination only. See the
+[live U4D execution/handoff](u4d-final-execution.md) for current readiness;
+the original U4C results below are retained as historical evidence.
+
 Source baseline: `7bc397ba3ed8a76383c7834a4bfd2b20856f0b80`.
 Scope: crash/reopen/retry/reconcile only; no new scientific or release semantics.
 No dependency installation, real manuscript changes, or push.

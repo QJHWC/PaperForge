@@ -821,11 +821,15 @@ PaperForge/
 ### 质量检查
 
 ```bash
-python -m pytest -q
-python -m ruff check paperforge engine agents frontend tests
+python -m pytest tests -q
+python -m ruff check .
 python -m mypy paperforge
 python -m pip check
 ```
+
+U4D 本地验收与限制见 [执行及交接记录](docs/u4d-final-execution.md) 和
+[完整流程 smoke 报告](docs/u4d-final-smoke.md)。本地测试通过不等于远端审查通过、
+论文 Evidence 获批或已发布；U4C 仍仅覆盖单写者和受控进程终止，不宣称物理掉电或并发安全。
 
 GitHub Actions 覆盖：
 

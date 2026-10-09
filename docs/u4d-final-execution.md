@@ -22,12 +22,12 @@ of unpublished materials, paid resources, sudo, or system Python 3.14.
 
 | Requirements | Evidence required | Current state |
 |---|---|---|
-| A1 environment | Interpreter/venv/pip and declared dependency inspection | IN_PROGRESS |
-| A2 full tests | Full pytest, counts and failure classification | PENDING |
-| A3-A4 static | Existing Ruff whole-repository and mypy paperforge scope pass | PENDING |
-| A5 integration | End-to-end synthetic evidence-to-status FinalSmokeReport and negative boundaries | PENDING |
-| A6 reliability | ResultUpdate, actual kill/reopen, import reopen, split-brain | PENDING |
-| A7-A10 local readiness | Documentation, hygiene, security review, commits | PENDING |
+| A1 environment | Interpreter/venv/pip and declared dependency inspection | PASS; isolated Python 3.11.15, pip check clean |
+| A2 full tests | Full pytest, counts and failure classification | PASS; 778 passed, 5 opt-in skips, 0 failures/errors |
+| A3-A4 static | Existing Ruff whole-repository and mypy paperforge scope pass | PASS; Ruff ., mypy 81 files |
+| A5 integration | End-to-end synthetic evidence-to-status FinalSmokeReport and negative boundaries | PASS; no real human approval/release |
+| A6 reliability | ResultUpdate, actual kill/reopen, import reopen, split-brain | PASS_WITH_LIMITATIONS; all 69 U4C tests retained |
+| A7-A10 local readiness | Documentation, hygiene, security review, commits | PASS; scoped A9, docs/hygiene, build/wheel smoke |
 | A11-A13 remote/freeze | Required local gates, authorized push, both review findings, fix/retest loop | PENDING |
 | B0-B4 / P0 | Unique paper workspace, revision copy, baseline hashes, inventory, legal imports/ledger | PENDING_TOOL_FREEZE |
 | C1-C7 / P1 | Layer guidance, bounded attribution, external validity, citation/PLC audit, layout, controlled patches | PENDING_TOOL_FREEZE |
@@ -179,3 +179,32 @@ The earlier U4C/U4D-Prep reports are historical evidence, not current gate resul
   778 passed, 5 skipped, 0 failed, 0 errors**; Ruff PASS; mypy PASS (81 files).
   Consolidated A9 review, documentation/build checks and remote reviews remain
   pending; no push or tool freeze is claimed here.
+
+## Consolidated A9 review (2026-10-09)
+
+Independent reviewer approved `530d2f5..70ee8be` plus the exact LaTeX changes
+subsequently committed as `1f86687`. No still-open reproduced HIGH/CRITICAL was
+found within this batch. The reviewer independently ran **92 tests**, whole-scope
+Ruff and configured mypy (81 files). Closed findings are recorded in checkpoints
+above: publication/operation paths, import adapter and binding/currentness,
+SVG/PDF serialization, generated LaTeX and historical apply. This is a scoped
+local review, not a full historical-repository certification or remote review.
+
+## Local PushReadiness (2026-10-09)
+
+- All required local gates pass at code commit `1f86687`: full pytest 778/5/0/0
+  (passed/skipped/failed/errors), whole-scope Ruff, configured mypy, integration,
+  reliability and scoped A9 review. No fixture has become real-paper Evidence.
+- CI-pinned `build==1.2.2.post1` installed only in the same isolated environment;
+  `python -m build` produced sdist/wheel successfully. Official
+  `tools/verify_wheel.py` passed from an isolated temporary installation. Pip check
+  reports no broken requirements. Build products remain ignored, not staged.
+- README, U4C and U4D handoffs now distinguish current gates from historical
+  environment failures. Tracked changes at final documentation review are only
+  these four docs; the existing untracked private `.paperforge/` remains untouched.
+  No real paper, PDF pages, environment, cache, temporary DB or private log is
+  included. `git diff --check` passes. No merge/amend/history rewrite occurred.
+- Local status: **PUSH_READY_WITH_DOCUMENTED_LIMITATIONS**. Authorized branch
+  push is the next action. This is not tool freeze, remote review clearance,
+  merge authorization, scientific acceptance or publication release.
+- Remote automatic code/security reviews and all real-paper phases remain open.
