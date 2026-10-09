@@ -145,3 +145,18 @@ The earlier U4C/U4D-Prep reports are historical evidence, not current gate resul
 - A9 remains open: SVG attribute serialization, invalid preview PDF bytes, and
   dynamically constructed LaTeX file commands still require repair. No push,
   remote review, tool freeze, or real-paper revision has occurred.
+
+## Figure serialization checkpoint (2026-10-09)
+
+- Figure generator v2 uses XML serialization for title/series data. Three
+  red-first cases confirm quotes, ampersands and angle brackets remain data.
+- Replaced invalid PDF-header-plus-SVG bytes with a real deterministic single-page
+  PDF: proper objects, stream lengths, cross-reference table and trailer, plotted
+  observations and disclosed axis ranges. No dependency was added. It is explicitly
+  a preview, not a publication-ready figure; series/metric identities stay in the
+  canonical sidecar. Empty observations are labeled rather than fabricated.
+- Strict pypdf parsing, PyMuPDF drawing/render checks, byte-identical retry and
+  actual Poppler render/visual inspection pass. Independent review: 25 tests PASS,
+  Ruff/mypy PASS, no HIGH/CRITICAL within this repair.
+- Full regression: **764 collected, 759 passed, 5 skipped, 0 failed, 0 errors**;
+  Ruff PASS; mypy PASS (80 files). LaTeX policy repair is still open and blocks push.

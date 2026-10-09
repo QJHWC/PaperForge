@@ -7,11 +7,12 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree as ET
 
 from .path_safety import atomic_write_bytes, safe_output_path
 
 TABLE_GENERATOR_VERSION = "paperforge.table-generator/v1"
-FIGURE_GENERATOR_VERSION = "paperforge.figure-generator/v1"
+FIGURE_GENERATOR_VERSION = "paperforge.figure-generator/v2"
 FACT_GENERATOR_VERSION = "paperforge.fact-generator/v1"
 
 _BANNED_FACT_WORDS = (
@@ -80,6 +81,53 @@ def _format_display(canonical: str | None, places: int | None) -> str:
     except (InvalidOperation, ValueError):
         return str(canonical)
     return format(quantized, "f")
+
+
+def _figure_preview_pdf(series: Mapping[str, Sequence[Mapping[str, str]]]) -> bytes:
+    """Write a dependency-free, single-page PDF preview, never a release figure."""
+    points = [(Decimal(p["x"]), Decimal(p["y"])) for group in sorted(series) for p in series[group]]
+    if any(not value.is_finite() for point in points for value in point):
+        raise PublicationArtifactError("figure coordinates must be finite")
+    commands = [
+        "BT /F1 14 Tf 50 370 Td (Deterministic preview - not publication ready) Tj ET",
+        "BT /F1 10 Tf 50 350 Td (X/Y metrics and series identities: see plot_data.json) Tj ET",
+        "0.25 G 1 w 60 65 m 550 65 l S 60 65 m 60 320 l S",
+    ]
+    if points:
+        xmin, xmax = min(p[0] for p in points), max(p[0] for p in points)
+        ymin, ymax = min(p[1] for p in points), max(p[1] for p in points)
+        # Normalize canonical decimals before converting to display coordinates.
+        # Degenerate axes place the observation at the midpoint, not at zero.
+        for x, y in points:
+            px = Decimal(80) + (Decimal("0.5") if xmin == xmax else (x - xmin) / (xmax - xmin)) * 440
+            py = Decimal(85) + (Decimal("0.5") if ymin == ymax else (y - ymin) / (ymax - ymin)) * 215
+            commands.append(f"0.12 0.32 0.62 rg {px - 3:.4f} {py - 3:.4f} 6 6 re f")
+        commands += [
+            f"0 g BT /F1 10 Tf 60 42 Td (X range: {xmin:.4g} to {xmax:.4g}) Tj ET",
+            f"BT /F1 10 Tf 60 25 Td (Y range: {ymin:.4g} to {ymax:.4g}) Tj ET",
+        ]
+    else:
+        commands.append("BT /F1 12 Tf 190 195 Td (No paired observations) Tj ET")
+    stream = ("\n".join(commands) + "\n").encode("ascii")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 400] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(stream)).encode("ascii") + b" >>\nstream\n" + stream + b"endstream",
+    ]
+    output = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, 1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode("ascii") + obj + b"\nendobj\n")
+    xref = len(output)
+    output.extend(f"xref\n0 {len(offsets)}\n0000000000 65535 f \n".encode("ascii"))
+    for offset in offsets[1:]:
+        output.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    output.extend(f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode("ascii"))
+    return bytes(output)
 
 
 @dataclass(frozen=True)
@@ -394,17 +442,16 @@ def generate_figure(
     figure_id = spec.figure_id or f"figure-{spec_digest[:12]}"
     relative = _bundle_path("figures", figure_id)
     plot_data = {"figure_id": figure_id, "x_metric": spec.x_metric, "y_metric": spec.y_metric, "series": series}
-    # Deterministic SVG (no timestamps) + minimal deterministic PDF wrapper.
-    svg_points = []
+    # XML serializer keeps labels as inert data, not markup or attributes.
+    svg_root = ET.Element("svg", {"xmlns": "http://www.w3.org/2000/svg", "version": "1.1"})
+    ET.SubElement(svg_root, "title").text = figure_id
     for group in sorted(series):
         for point in series[group]:
-            svg_points.append(f'<circle cx="{point["x"]}" cy="{point["y"]}" data-series="{_tex_escape(group)}"/>')
-    svg = (
-        '<svg xmlns="http://www.w3.org/2000/svg" version="1.1">'
-        f"<title>{_tex_escape(figure_id)}</title>"
-        + "".join(sorted(svg_points)) + "</svg>\n"
-    )
-    pdf_body = f"%PDF-1.4\n%{figure_id}\n".encode() + svg.encode("utf-8") + b"\n%%EOF\n"
+            ET.SubElement(svg_root, "circle", {
+                "cx": point["x"], "cy": point["y"], "data-series": group,
+            })
+    svg = ET.tostring(svg_root, encoding="unicode") + "\n"
+    pdf_body = _figure_preview_pdf(series)
     contents = {
         "plot_data.json": (json.dumps(plot_data, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"),
         "plot_data.csv": ("series,x,y,x_row_id,y_row_id\n" + "".join(
