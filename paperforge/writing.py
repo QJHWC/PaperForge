@@ -10,6 +10,7 @@ from typing import Any
 from engine.secret_redaction import contains_secret
 
 from .artifacts import ArtifactRecord, ArtifactStore
+from .latex_safety import FORBIDDEN_LATEX as _FORBIDDEN_LATEX
 from .path_safety import atomic_write_text, reject_symlink_components
 from .protected_blocks import (
     PROTECTED_END,
@@ -30,11 +31,6 @@ _CITATION = re.compile(
     r"\\cite[a-zA-Z*]*\s*(?:\[[^\]]*\]\s*){0,2}\{([^{}]+)\}"
 )
 _BIB_ENTRY = re.compile(r"@\w+\s*\{\s*([^,\s]+)\s*,", re.IGNORECASE)
-_FORBIDDEN_LATEX = re.compile(
-    r"\\(?:input|include|write18|openout|immediate|ShellEscape)\b"
-    r"|\\usepackage(?:\[[^\]]*\])?\{shellesc\}",
-    re.IGNORECASE,
-)
 _EXPERIMENT_SECTION = re.compile(
     r"\\(?:section|subsection|subsubsection)\*?\s*\{[^{}]*"
     r"(?:experiment|evaluation|result|ablation|benchmark)[^{}]*\}",

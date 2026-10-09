@@ -10,6 +10,7 @@ from typing import Any
 from engine.secret_redaction import contains_secret
 
 from .artifacts import ArtifactRecord, ArtifactStore
+from .latex_safety import FORBIDDEN_LATEX as _FORBIDDEN_LATEX
 from .path_safety import atomic_write_text, reject_symlink_components
 from .protected_blocks import (
     ProtectedBlockViolation,
@@ -24,12 +25,6 @@ from .references import (
     format_reference_context,
 )
 from .writing import _strip_fence
-
-_FORBIDDEN_LATEX = re.compile(
-    r"\\(?:input|include|write18|openout|immediate|ShellEscape)\b"
-    r"|\\usepackage(?:\[[^\]]*\])?\{shellesc\}",
-    re.IGNORECASE,
-)
 
 
 class PatchError(RuntimeError):

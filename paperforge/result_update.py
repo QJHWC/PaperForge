@@ -395,6 +395,10 @@ def build_proposal(
     if PROTECTED_START not in proposed_block or PROTECTED_END not in proposed_block:
         raise ResultUpdateValidationError("proposed block must preserve protected markers")
     # Scope: only the indexed block may change.
+    from .latex_safety import FORBIDDEN_LATEX
+
+    if FORBIDDEN_LATEX.search(proposed_block):
+        raise ResultUpdateError("proposed block contains unsafe generated LaTeX")
     candidate = current_text.replace(old_block, proposed_block, 1)
     if candidate.count(PROTECTED_START) != current_text.count(PROTECTED_START):
         raise ResultUpdateValidationError("protected marker count changed")
@@ -672,8 +676,12 @@ def _finish_applied(root: Path, memory: Any, proposal: Mapping[str, Any],
 
 
 def apply_proposal(workspace: str | Path, memory: Any, proposal_id: str) -> dict[str, Any]:
+    from .latex_safety import FORBIDDEN_LATEX
+
     root = Path(workspace).expanduser().resolve(strict=True)
     proposal, spec, row = _load_update(root, memory, proposal_id)
+    if FORBIDDEN_LATEX.search(str(proposal["proposed_block"])):
+        raise ResultUpdateError("proposed block contains unsafe generated LaTeX")
     approval = _approval_for_recovery(root, memory, proposal)
     target = _resolve_target(root, spec["target_path"])
     current_text = target.read_bytes().decode("utf-8")

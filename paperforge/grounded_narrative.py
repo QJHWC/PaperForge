@@ -9,6 +9,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from .latex_safety import FORBIDDEN_LATEX as _FORBIDDEN_LATEX
+
 NARRATIVE_SPEC_SCHEMA = "paperforge.grounded-narrative-spec/v1"
 NARRATIVE_DRAFT_SCHEMA = "paperforge.grounded-narrative-draft/v1"
 NARRATIVE_POLICY_VERSION = "paperforge.narrative-policy/v1"
@@ -24,10 +26,6 @@ _STATISTICAL_FLAGS = (
 )
 
 _STRONG_RANKING = ("best overall", "superior", "dominates", "state-of-the-art", "best")
-
-_FORBIDDEN_LATEX = re.compile(
-    r"\\(?:input|include|write18|openout|immediate|ShellEscape)\b", re.I
-)
 
 _LAYER_ALLOWED = {
     "simulated": ("simulated", "proxy", "under the simulation profile", "simulation profile"),

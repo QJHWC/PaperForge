@@ -160,3 +160,22 @@ The earlier U4C/U4D-Prep reports are historical evidence, not current gate resul
   Ruff/mypy PASS, no HIGH/CRITICAL within this repair.
 - Full regression: **764 collected, 759 passed, 5 skipped, 0 failed, 0 errors**;
   Ruff PASS; mypy PASS (80 files). LaTeX policy repair is still open and blocks push.
+
+## Generated LaTeX guard checkpoint (2026-10-09)
+
+- Shared conservative policy now protects writing, prose patch, narrative, and
+  ResultUpdate build/apply, including historical proposals produced before the
+  new policy. Rejected operations preserve source bytes and approval state.
+- Red-first dynamic-command, encoded-input, file-stream and file-environment
+  cases initially failed. Independent review also reproduced the standard kernel
+  InputIfFileExists wrapper; it and common file-input wrappers are now rejected.
+  Review caught an overbroad math-subscript check; narrowed matching preserves
+  actual alpha/theta subscript patch use. **19 regressions pass**.
+- This is generated-source validation, not an arbitrary-TeX execution sandbox.
+  Existing source macros/packages remain trusted inputs. Compilation requires
+  explicit no-shell-escape and an isolated, least-privilege working directory;
+  source guard success is not a permission to execute untrusted TeX.
+- Independent scoped review approves. Latest full run: **783 collected,
+  778 passed, 5 skipped, 0 failed, 0 errors**; Ruff PASS; mypy PASS (81 files).
+  Consolidated A9 review, documentation/build checks and remote reviews remain
+  pending; no push or tool freeze is claimed here.
