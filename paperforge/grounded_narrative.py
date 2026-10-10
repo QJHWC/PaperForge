@@ -13,7 +13,7 @@ from .latex_safety import FORBIDDEN_LATEX as _FORBIDDEN_LATEX
 
 NARRATIVE_SPEC_SCHEMA = "paperforge.grounded-narrative-spec/v1"
 NARRATIVE_DRAFT_SCHEMA = "paperforge.grounded-narrative-draft/v1"
-NARRATIVE_POLICY_VERSION = "paperforge.narrative-policy/v1"
+NARRATIVE_POLICY_VERSION = "paperforge.narrative-policy/v2"
 
 _SENTENCE_ROLES = (
     "metric_report", "comparison", "protocol_statement",
@@ -272,15 +272,20 @@ def validate_narrative(
             # Qualifier consistency (model/dataset/device/size when facts declare them).
             for fid in sent.fact_ids:
                 qualifiers = dict((fact_map.get(fid) or {}).get("qualifiers") or {})
-                for key in ("model_id", "dataset", "device", "input_size"):
-                    expected = str(qualifiers.get(key) or "")
-                    if not expected:
-                        continue
-                    if key == "model_id" and expected.lower() not in lowered:
-                        # Model must be named correctly when the fact is model-specific.
-                        pass
-                    for _candidate in (f"{key} {expected}", str(expected)):
-                        pass
+                identity = dict((fact_map.get(fid) or {}).get("run_identity") or {})
+                expected = str(identity.get("model_id") or qualifiers.get("model_id") or "")
+                if expected and not re.search(rf"(?<!\w){re.escape(expected)}(?!\w)", sent.text, re.I):
+                    raise NarrativeGroundingError(
+                        f"GROUNDING_MISMATCH model_id in {sent.sentence_id}: must name {expected!r}")
+                if expected:
+                    unit = str((fact_map.get(fid) or {}).get("unit") or "")
+                    simple_report = (
+                        rf"\s*(?:The\s+)?{re.escape(expected)}\s+"
+                        rf"(?:measured(?:\s+latency\s+was)?|reached|recorded)\s+"
+                        rf"[+-]?\d+(?:\.\d+)?(?:\s+{re.escape(unit)})?\.\s*"
+                    )
+                    if not re.fullmatch(simple_report, sent.text, re.I):
+                        needs_human.append(f"{sent.sentence_id}: model/value subject attribution unresolved")
                 text_identity = {
                     "input_size": re.search(r"(\d{3,4})\s*px", sent.text, re.I),
                     "device": re.search(r"raspberry|sim_rpi5|remapped|host", sent.text, re.I),

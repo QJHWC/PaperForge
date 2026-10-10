@@ -11,7 +11,7 @@ from xml.etree import ElementTree as ET
 
 from .path_safety import atomic_write_bytes, reject_symlink_components, safe_output_path
 
-TABLE_GENERATOR_VERSION = "paperforge.table-generator/v1"
+TABLE_GENERATOR_VERSION = "paperforge.table-generator/v2"
 FIGURE_GENERATOR_VERSION = "paperforge.figure-generator/v2"
 FACT_GENERATOR_VERSION = "paperforge.fact-generator/v2"
 
@@ -308,7 +308,10 @@ def generate_table(
     ledger = _load_ledger(root, memory, spec.ledger_id)
     rows = _ledger_rows(ledger)
     by_id = {str(r.get("row_id")): r for r in rows}
-    selected = [by_id[rid] for rid in spec.row_ids if rid in by_id] if spec.row_ids else list(rows)
+    if any(rid not in by_id for rid in spec.row_ids):
+        raise PublicationArtifactError("unknown table row ID")
+    selected = [by_id[rid] for rid in spec.row_ids] if spec.row_ids else list(rows)
+    selected = [row for row in selected if row.get("metric_name") in spec.columns]
     # Row order: explicit only; default preserves ledger order (no best-first).
     if spec.row_order:
         order = {rid: index for index, rid in enumerate(spec.row_order)}
@@ -317,23 +320,36 @@ def generate_table(
         selected = sorted(selected, key=lambda r: str(r.get("row_id")))
     # Build structured rows: canonical values preserved; display only in tex.
     table_rows: list[dict[str, Any]] = []
+    grouped: dict[str, dict[str, Any]] = {}
     for row in selected:
+        key = json.dumps({name: row.get(name) for name in (
+            "run_identity", "measurement_kind", "reducer", "ddof", "group", "allowed_cross", "cross_intent"
+        )}, sort_keys=True)
+        metric = str(row["metric_name"])
         lineage = row.get("lineage") if isinstance(row.get("lineage"), list) else []
-        table_rows.append({
-            "row_id": row.get("row_id"),
-            "metric_values": {col: None for col in spec.columns},
-            "unit": row.get("unit"),
-            "run_identity": row.get("run_identity"),
-            "measurement_kind": row.get("measurement_kind"),
-            "source_evidence_ids": row.get("source_evidence_ids"),
-            "lineage": lineage,
-        })
-    # Map metric columns: each ledger row carries one metric; pivot by row.
-    # For v1, columns are metrics and each row contributes its own metric cell.
-    for table_row, ledger_row in zip(table_rows, selected, strict=False):
-        metric = str(ledger_row.get("metric_name") or "")
-        if metric in spec.columns:
-            table_row["metric_values"][metric] = ledger_row.get("value_str")
+        if key not in grouped:
+            grouped[key] = {
+                "row_id": row.get("row_id"),
+                "source_row_ids": [],
+                "metric_values": {col: None for col in spec.columns},
+                "metric_units": {}, "metric_source_evidence_ids": {},
+                "unit": row.get("unit"),
+                "run_identity": row.get("run_identity"),
+                "measurement_kind": row.get("measurement_kind"),
+                "source_evidence_ids": [], "lineage": [],
+            }
+            table_rows.append(grouped[key])
+        table_row = grouped[key]
+        if metric in table_row["metric_units"]:
+            raise PublicationArtifactError(f"ambiguous table metric {metric}; select explicit row_ids")
+        table_row["metric_values"][metric] = row.get("value_str")
+        table_row["metric_units"][metric] = row.get("unit")
+        table_row["metric_source_evidence_ids"][metric] = list(row.get("source_evidence_ids") or [])
+        table_row["source_row_ids"].append(row.get("row_id"))
+        table_row["source_evidence_ids"] = sorted(set(table_row["source_evidence_ids"]) | set(row.get("source_evidence_ids") or []))
+        table_row["lineage"].extend(lineage)
+        if len(set(table_row["metric_units"].values())) > 1:
+            table_row["unit"] = None
     # Highlights: explicit max/min only, recorded in manifest.
     highlights: list[dict[str, Any]] = []
     for rule in spec.highlight_rules:

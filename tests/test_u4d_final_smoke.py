@@ -72,7 +72,7 @@ def test_final_evidence_to_release_status_smoke(tmp_path):
             if name != "manifest.json":
                 assert _sha(tmp_path / "artifacts" / kind / aid / name) == digest
         assert artifact["manifest"]["publication_ready"] is False
-    sentence = NarrativeSentence("s1", "The test measured latency was 12.5 ms.",
+    sentence = NarrativeSentence("s1", "TEST_ONLY measured latency was 12.5 ms.",
                                  fact_ids=(fact["fact_id"],))
     spec = GroundedNarrativeSpec(allowed_fact_ids=(fact["fact_id"],))
     paragraphs = [[sentence]]

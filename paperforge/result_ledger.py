@@ -34,6 +34,7 @@ class LedgerConflictError(LedgerError):
 
 CROSSABLE_DIMENSIONS = frozenset(
     {
+        "model_id",
         "seed",
         "checkpoint_sha256",
         "dataset_id",

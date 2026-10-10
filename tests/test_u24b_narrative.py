@@ -43,7 +43,7 @@ def _sent(text, **overrides):
 
 
 def test_metric_bound_pass(tmp_path: Path) -> None:  # 1
-    out = validate_narrative(_spec(), [[_sent("Control reached 0.8511.")]], facts=_facts(), protocol_facts=_proto())
+    out = validate_narrative(_spec(), [[_sent("YOLO11n reached 0.8511.")]], facts=_facts(), protocol_facts=_proto())
     assert out["overall_status"] == "passed"
 
 
@@ -60,10 +60,11 @@ def test_model_delta_without_fact_fail() -> None:  # 3
 
 
 def test_delta_fact_pass() -> None:  # 4
-    out = validate_narrative(_spec(), [[_sent("Trails by -0.0015.", role="comparison",
+    out = validate_narrative(_spec(), [[_sent("The route trails by -0.0015.", role="comparison",
                                                        fact_ids=("fact-delta",))]],
                              facts=_facts(), protocol_facts=_proto())
-    assert out["overall_status"] == "passed"
+    # The value is grounded, but comparative subject attribution needs review.
+    assert out["overall_status"] == "needs_human"
 
 
 def test_percent_computed_fail() -> None:  # 5
@@ -159,14 +160,14 @@ def test_reference_not_authority() -> None:  # 17
 
 def test_stats_needs_human() -> None:  # 18,19
     for word in ("significantly outperforms", "equivalent"):
-        out = validate_narrative(_spec(), [[_sent(f"Control 0.8511 {word}.")]],
+        out = validate_narrative(_spec(), [[_sent(f"YOLO11n 0.8511 {word}.")]],
                                  facts=_facts(), protocol_facts=_proto())
         assert out["overall_status"] == "needs_human"
 
 
 def test_best_without_authorization_fail() -> None:  # 20
     with pytest.raises(Exception, match="ranking"):
-        validate_narrative(_spec(), [[_sent("Best overall at 0.8511.")]], facts=_facts(), protocol_facts=_proto())
+        validate_narrative(_spec(), [[_sent("YOLO11n is best overall at 0.8511.")]], facts=_facts(), protocol_facts=_proto())
 
 
 def test_transition_rules() -> None:  # 21,22
@@ -203,7 +204,7 @@ def test_no_direct_file_write_and_u24a_gates(tmp_path: Path) -> None:  # 28,29,3
     PaperForgeService(tmp_path)
     tex = tmp_path / "paper.tex"
     tex.write_text("\\documentclass{article}\n\\begin{document}\nIntro.\n% PAPERFORGE-PROTECTED-EXPERIMENT-START\nOld 0.8511.\n% PAPERFORGE-PROTECTED-EXPERIMENT-END\n\\end{document}\n", encoding="utf-8")
-    sents = [[_sent("Control 0.8511.")]]
+    sents = [[_sent("YOLO11n reached 0.8511.")]]
     out = validate_narrative(_spec(), sents, facts=_facts(), protocol_facts=_proto())
     assert tex.read_text() .count("Control") == 0  # 28
     assert out["overall_status"] == "passed"
@@ -216,7 +217,7 @@ def test_narrative_pass_not_approved_and_bytes_gate(tmp_path: Path) -> None:  # 
 def test_narrative_to_u24a_integration(tmp_path: Path) -> None:  # 29 (integration)
 
     service = PaperForgeService(tmp_path)
-    sents = [[_sent("Control 0.8511.")]]
+    sents = [[_sent("YOLO11n reached 0.8511.")]]
     integrated = build_update_from_narrative(
         tmp_path, service.memory, spec=_spec(), paragraphs=sents,
         facts=_facts(), target_spec_kwargs={
