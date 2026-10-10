@@ -342,7 +342,11 @@ class LocalBackend(ComputeBackend):
                 candidate = Path(raw).expanduser().resolve(strict=True)
                 if candidate.is_dir():
                     read_roots.add(candidate)
-        write_roots = {temporary}
+        # The sandboxed process runs with cwd=workdir and must be able to
+        # create files there (temporary files, bytecode caches, renamed
+        # outputs), not only touch pre-declared output paths. workdir is
+        # already an absolute path at every call site.
+        write_roots = {temporary, workdir}
         for raw_output in spec.outputs:
             if any(character in str(raw_output) for character in "*?[]"):
                 raise JobStateError(
