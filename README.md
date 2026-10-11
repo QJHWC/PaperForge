@@ -9,9 +9,6 @@
   <a href="https://linux.do" target="_blank">
     <img src="https://img.shields.io/badge/LINUX-DO-FFB003?style=for-the-badge&logo=linux&logoColor=white" alt="LINUX DO" />
   </a>
-  <a href="https://ytcc.edu.cn/">
-    <img src="docs/images/ytcc-logo.jpg" alt="ytcc 校徽" width="28" height="28" /> ytcc
-  </a>
 </p>
 
 PaperForge v3 是一个以证据为中心的科研工作系统，用于研究规划、受控实验、
@@ -852,12 +849,6 @@ macOS + Ubuntu + Windows
 感谢 [LINUX DO](https://linux.do) 社区提供开放的技术交流环境。README 顶部保留
 原项目的 LINUX DO 徽章，点击即可进入社区。该链接用于社区交流指引，不表示
 LINUX DO 对本项目提供官方背书、担保或商业授权。
-
-### ytcc
-
-[ytcc（烟台城市科技职业学院）](https://ytcc.edu.cn/) ·
-[校徽来源](https://eduip.cn/index/School/index/school_id/2839)。
-此处仅提供学校官网链接，不表示学校对本项目的官方背书。
 
 ### 许可证
 
