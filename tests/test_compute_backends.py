@@ -44,12 +44,12 @@ from paperforge.path_safety import UnsafePathError
 from paperforge.policy import ExecutionPolicy, PolicyViolation
 
 
-def _local_test_timeout(seconds: int = 5) -> int:
-    return 60 if os.name == "nt" else seconds
+def _local_test_timeout(seconds: int = 5, *, windows_seconds: int = 60) -> int:
+    return windows_seconds if os.name == "nt" else seconds
 
 
-def _local_process_timeout(seconds: int = 5) -> int:
-    return 30 if os.name == "nt" else seconds
+def _local_process_timeout(seconds: int = 5, *, windows_seconds: int = 30) -> int:
+    return windows_seconds if os.name == "nt" else seconds
 
 
 def _secure_test_file(path: Path, *, mode: int) -> None:
@@ -917,6 +917,7 @@ def test_local_backend_recovers_completed_state_without_secret_environment(
     submitted = backend.submit(
         JobSpec(
             name="redacted-and-durable",
+            workdir=str(tmp_path),
             command=[
                 sys.executable,
                 "-c",
@@ -958,6 +959,7 @@ def test_local_backend_recovers_live_job_after_backend_restart(
     ).submit(
         JobSpec(
             name="restart-live",
+            workdir=str(tmp_path),
             command=[
                 sys.executable,
                 "-c",
@@ -1000,6 +1002,7 @@ def test_local_backend_does_not_persist_or_inherit_host_credentials(
     submitted = backend.submit(
         JobSpec(
             name="clean-environment",
+            workdir=str(tmp_path),
             command=[
                 sys.executable,
                 "-c",
@@ -1559,18 +1562,23 @@ def test_local_resume_uses_fresh_attempt_artifacts(tmp_path: Path) -> None:
             command=[sys.executable, "-c", code],
             workdir=workdir,
             outputs=["result.txt"],
-            resources=ResourceSpec(timeout_seconds=_local_process_timeout()),
+            # Windows AppContainer setup (recursive ACL grants over the
+            # interpreter install plus cold Defender scans) has been observed
+            # to exceed the default 30s supervised timeout on loaded CI
+            # runners (first attempt ran 33s before timeout). The freshness
+            # assertions below are unchanged; only the time budget grows.
+            resources=ResourceSpec(timeout_seconds=_local_process_timeout(windows_seconds=180)),
             execute=True,
         )
     )
 
     current = submitted
-    deadline = time.monotonic() + _local_test_timeout()
+    deadline = time.monotonic() + _local_test_timeout(windows_seconds=240)
     while current.status is JobStatus.RUNNING:
         assert time.monotonic() < deadline
         time.sleep(0.02)
         current = backend.status(submitted.job_id, execute=True)
-    assert current.status is JobStatus.SUCCEEDED
+    assert current.status is JobStatus.SUCCEEDED, current.message
     first = backend.sync_artifacts(
         submitted.job_id,
         tmp_path / "first",
@@ -1581,12 +1589,12 @@ def test_local_resume_uses_fresh_attempt_artifacts(tmp_path: Path) -> None:
 
     resumed = backend.resume(submitted.job_id, execute=True)
     current = resumed
-    deadline = time.monotonic() + _local_test_timeout()
+    deadline = time.monotonic() + _local_test_timeout(windows_seconds=240)
     while current.status is JobStatus.RUNNING:
         assert time.monotonic() < deadline
         time.sleep(0.02)
         current = backend.status(submitted.job_id, execute=True)
-    assert current.status is JobStatus.SUCCEEDED
+    assert current.status is JobStatus.SUCCEEDED, current.message
     second = backend.sync_artifacts(
         submitted.job_id,
         tmp_path / "second",

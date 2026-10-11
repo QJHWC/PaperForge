@@ -1,0 +1,272 @@
+# U4D Final execution and downstream handoff
+
+Batch started 2026-09-30 from `530d2f50dfbefec05b760c5e0f032cb09b781905`,
+branch `feature/u4c-reliability`. This is a running evidence log, not a completion
+certificate. The full batch includes the subsequent PCB paper revision; completing
+U4D alone must not close the overall goal.
+
+Current remote checkpoint: first authorized push `f7d8dd7` is under review in
+[PR #3](https://github.com/QJHWC/PaperForge/pull/3). It is **not frozen**: code
+review found seven valid blockers and CI exposed renderer and Windows defects.
+Local repairs pass; fresh remote verification is pending (see below). Earlier local
+approval is historical evidence, not a claim that remote review found no defects.
+
+## Authorization and order
+
+The batch owner authorizes isolated Python 3.11 dependency installation, source and
+test repairs, local commits, and feature-branch push only after every required local
+gate passes. Every push must be followed by inspection of both automatic code and
+security review findings for the exact commit. No automatic merge.
+
+After tool freeze, work in a separate paper revision branch/copy. Preserve original
+source and experimental artifacts. Never promote manuscript-only numbers, fixtures,
+simulated/remapped values or fixed-power proxies into measured Evidence. Human-only
+gates remain pending; continue other independent tasks. No new third-party upload
+of unpublished materials, paid resources, sudo, or system Python 3.14.
+
+## Requirement coverage tracker
+
+| Requirements | Evidence required | Current state |
+|---|---|---|
+| A1 environment | Interpreter/venv/pip and declared dependency inspection | PASS; isolated Python 3.11.15, pip check clean |
+| A2 full tests | Full pytest, counts and failure classification | PASS; 819 passed, 5 opt-in skips, 0 failures/errors |
+| A3-A4 static | Existing Ruff whole-repository and mypy paperforge scope pass | PASS; Ruff ., mypy 81 files |
+| A5 integration | End-to-end synthetic evidence-to-status FinalSmokeReport and negative boundaries | PASS; no real human approval/release |
+| A6 reliability | ResultUpdate, actual kill/reopen, import reopen, split-brain | PASS_WITH_LIMITATIONS; all 69 U4C tests retained |
+| A7-A10 local readiness | Documentation, hygiene, security review, commits | PASS; scoped A9, docs/hygiene, build/wheel smoke |
+| A11-A13 remote/freeze | Required local gates, authorized push, both review findings, fix/retest loop | PENDING |
+| B0-B4 / P0 | Unique paper workspace, revision copy, baseline hashes, inventory, legal imports/ledger | PENDING_TOOL_FREEZE |
+| C1-C7 / P1 | Layer guidance, bounded attribution, external validity, citation/PLC audit, layout, controlled patches | PENDING_TOOL_FREEZE |
+| D1-D10 / P2-P3 / H0-H4 | Hardware and artifact inventory, frozen protocols, real feasible measurements/analyses | PENDING_TOOL_FREEZE |
+| E1-E4 / V0-V3 | Split, provenance, hardware and scientific-scope audits | PENDING_TOOL_FREEZE |
+| F1-F8 / P4 / V4 | Verified ledger, deterministic artifacts, grounded text, review, controlled update, consistency | PENDING_TOOL_FREEZE |
+| F9-F12 | Bound compile, every-page render/QA, real human requests, response draft, revision package | PENDING_TOOL_FREEZE |
+| G1-G3 | Separate paper commits, conditional push, itemized P/H/V/R statuses and blockers | PENDING_TOOL_FREEZE |
+| H-I | Continuous independent progress; final 40-item consolidated delivery | PENDING |
+
+## Preflight facts
+
+- Initial tracked worktree clean; existing untracked `.paperforge/` retained.
+- Python support remains `>=3.10,<3.13`; no metadata change required for the three
+  known missing dependencies.
+- `pymupdf==1.27.1` is an optional writing dependency, also installed by the official
+  dev requirements through `requirements-writeup.txt`.
+- `ruff==0.12.2` and `mypy==1.16.1` are dev-only dependencies.
+- Created repository-local ignored `.venv` with `/opt/homebrew/bin/python3.11`.
+  Installation uses `.venv/bin/python3.11 -m pip install -r requirements-dev.txt`;
+  no global environment is modified.
+- Official CI scope: `python -m pytest -q --tb=short`, `python -m ruff check .`,
+  `python -m mypy paperforge`. Pytest discovers `tests`; Ruff retains the existing
+  exclusions/rules; mypy retains the configured `paperforge` scope.
+- No push, paper edits, or release authorization has occurred in this batch.
+
+## Limitations retained
+
+U4C remains PASSED_WITH_LIMITATIONS: controlled termination under a single-writer,
+quiesced-repair model. Physical power loss and concurrent writers are not proven.
+The earlier U4C/U4D-Prep reports are historical evidence, not current gate results.
+
+## First verified checkpoint
+
+- Official dev requirements installed successfully into `.venv`; `pip check`
+  reports no broken requirements. No dependency metadata changes were needed.
+- Initial isolated full run: 703 passed, 5 skipped, 3 failed, 0 collection errors.
+  Classification: TEST_EXPECTATION / non-hermetic fixture. Three LocalBackend
+  tests implicitly copied the repository cwd, including the new venv symlinks.
+  They now explicitly use their own `tmp_path` as workdir; the production symlink
+  rejection policy and all assertions remain intact.
+- After repairs: **711 collected, 706 passed, 5 skipped, 0 failed, 0 errors**.
+  All five skips are opt-in real Docker/SSH/Slurm/Kubernetes integration cases.
+  Five PyMuPDF SWIG deprecation warnings remain visible.
+- Ruff official scope PASS after import/unused-code/style cleanup; no configuration
+  relaxation. A vacuous `... or True` assertion was strengthened to require the
+  persisted audit timestamp, and three broad exception assertions were narrowed.
+- Mypy official scope PASS (80 source files), with explicit mapping narrowing,
+  manifest annotations and immutable-adapter Protocol properties. No blanket
+  `ignore_errors` or scope reduction.
+- Independent Python review found no new HIGH/CRITICAL in these repairs. It did
+  reproduce a **pre-existing HIGH** in publication artifact fixed-name temporary
+  writes: symlink traversal can overwrite an outside sentinel before registration
+  rejects the output. This blocks push; repair and regression are next.
+- End-to-end smoke inspection also found the import-to-ledger adapter connection
+  requires verification: imported source Evidence lacks inline metric metadata,
+  while ledger currently consumes only inline metadata. Do not fake this connection
+  with hand-added scientific Evidence. A dedicated regression is required.
+- Integration smoke, final security, remote review, tool freeze and all paper
+  revision requirements remain open. No push is authorized by this checkpoint alone.
+
+## Publication write safety repair
+
+- Added 24 red-first cases: three generators, temporary/output/manifest/directory
+  symlinks, traversal IDs, and deterministic retry. Before repair: 15 failed,
+  9 passed. After repair, these and existing artifact tests: 50 passed.
+- Table/figure/fact writes now prevalidate all members and retained legacy temp
+  names, reject unsafe artifact IDs, and use random exclusive temporary files,
+  file fsync and atomic replace. A malicious outside sentinel remains unchanged;
+  invalid paths are refused before any member output is written.
+- Independent reviewer replayed the original exploit and approved the fix with
+  no new HIGH/CRITICAL findings in scope. Concurrent directory replacement is
+  still outside the single-writer contract.
+- Full regression: **735 collected, 730 passed, 5 skipped, 0 failed, 0 errors**;
+  Ruff PASS; configured mypy PASS (80 source files). No assertion was weakened.
+- Commit `58783af` contains the earlier isolated-environment/static gate repairs;
+  this security repair is committed separately.
+
+## Import-to-ledger and integration checkpoint
+
+- Publication path repair commit: `fae3b9c`.
+- Real integration defect confirmed red-first: approved/materialized metric JSON
+  produced an empty ledger because the registered adapters were never invoked.
+  Adapter extraction now runs from exact approved source bytes with manifest
+  identity/semantics, integrity checks and source-locator/hash provenance. It does
+  not mint or rewrite Evidence and does not parse manuscript numbers.
+- Independent review found and closed two binding gaps before commit: mutable
+  Evidence semantics cannot override the approved manifest; currentness cannot
+  bypass original import binding by deleting/changing current metadata. Recomputed
+  observation digests detect tampering while frozen history remains unchanged.
+- Sixteen import-path tests and one end-to-end integration smoke pass. Old U23
+  test fixture now uses actual materialized source Evidence instead of a fabricated
+  orphan metric row; all original integrity/currentness assertions are retained.
+- [FinalSmokeReport](u4d-final-smoke.md): real adapter-to-status pipeline, real
+  PyMuPDF fixture build/Poppler render, missing human gates and release refusal.
+  Combined with all U4C reliability tests: **86 passed**.
+- Full regression: **752 collected, 747 passed, 5 skipped, 0 failed, 0 errors**;
+  Ruff PASS; mypy PASS (80 files). Five SWIG warnings remain visible.
+- Broader A9 review is still in progress. It has reproduced another pre-existing
+  fixed-temp symlink overwrite in ResultUpdate proposal/spec/validation writes.
+  This is a push blocker and is next to repair. Remote review and paper revision
+  have not started; the overall goal remains active.
+
+## Operation write safety checkpoint (2026-10-09)
+
+- ResultUpdate prevalidates all proposal members and legacy temporary paths;
+  external imports validate IDs and member paths. Both use random atomic writes.
+- Eight red-first regressions preserve outside sentinel bytes and existing state
+  on unsafe output or temporary paths. Related recovery tests: **35 passed**.
+- Independent review approved the scoped repair and fixture-only smoke;
+  independent related tests: **29 passed**, Ruff PASS.
+- Full regression: **760 collected, 755 passed, 5 skipped, 0 failed, 0 errors**;
+  Ruff PASS; configured mypy PASS (80 files). The five real-compute opt-in skips
+  and five SWIG warnings remain as previously documented.
+- A9 remains open: SVG attribute serialization, invalid preview PDF bytes, and
+  dynamically constructed LaTeX file commands still require repair. No push,
+  remote review, tool freeze, or real-paper revision has occurred.
+
+## Figure serialization checkpoint (2026-10-09)
+
+- Figure generator v2 uses XML serialization for title/series data. Three
+  red-first cases confirm quotes, ampersands and angle brackets remain data.
+- Replaced invalid PDF-header-plus-SVG bytes with a real deterministic single-page
+  PDF: proper objects, stream lengths, cross-reference table and trailer, plotted
+  observations and disclosed axis ranges. No dependency was added. It is explicitly
+  a preview, not a publication-ready figure; series/metric identities stay in the
+  canonical sidecar. Empty observations are labeled rather than fabricated.
+- Strict pypdf parsing, PyMuPDF drawing/render checks, byte-identical retry and
+  actual Poppler render/visual inspection pass. Independent review: 25 tests PASS,
+  Ruff/mypy PASS, no HIGH/CRITICAL within this repair.
+- Full regression: **764 collected, 759 passed, 5 skipped, 0 failed, 0 errors**;
+  Ruff PASS; mypy PASS (80 files). LaTeX policy repair is still open and blocks push.
+
+## Generated LaTeX guard checkpoint (2026-10-09)
+
+- Shared conservative policy now protects writing, prose patch, narrative, and
+  ResultUpdate build/apply, including historical proposals produced before the
+  new policy. Rejected operations preserve source bytes and approval state.
+- Red-first dynamic-command, encoded-input, file-stream and file-environment
+  cases initially failed. Independent review also reproduced the standard kernel
+  InputIfFileExists wrapper; it and common file-input wrappers are now rejected.
+  Review caught an overbroad math-subscript check; narrowed matching preserves
+  actual alpha/theta subscript patch use. **19 regressions pass**.
+- This is generated-source validation, not an arbitrary-TeX execution sandbox.
+  Existing source macros/packages remain trusted inputs. Compilation requires
+  explicit no-shell-escape and an isolated, least-privilege working directory;
+  source guard success is not a permission to execute untrusted TeX.
+- Independent scoped review approves. Latest full run: **783 collected,
+  778 passed, 5 skipped, 0 failed, 0 errors**; Ruff PASS; mypy PASS (81 files).
+  Consolidated A9 review, documentation/build checks and remote reviews remain
+  pending; no push or tool freeze is claimed here.
+
+## Consolidated A9 review (2026-10-09)
+
+Independent reviewer approved `530d2f5..70ee8be` plus the exact LaTeX changes
+subsequently committed as `1f86687`. No still-open reproduced HIGH/CRITICAL was
+found within this batch. The reviewer independently ran **92 tests**, whole-scope
+Ruff and configured mypy (81 files). Closed findings are recorded in checkpoints
+above: publication/operation paths, import adapter and binding/currentness,
+SVG/PDF serialization, generated LaTeX and historical apply. This is a scoped
+local review, not a full historical-repository certification or remote review.
+
+## Local PushReadiness (2026-10-09)
+
+- All required local gates pass at code commit `1f86687`: full pytest 778/5/0/0
+  (passed/skipped/failed/errors), whole-scope Ruff, configured mypy, integration,
+  reliability and scoped A9 review. No fixture has become real-paper Evidence.
+- CI-pinned `build==1.2.2.post1` installed only in the same isolated environment;
+  `python -m build` produced sdist/wheel successfully. Official
+  `tools/verify_wheel.py` passed from an isolated temporary installation. Pip check
+  reports no broken requirements. Build products remain ignored, not staged.
+- README, U4C and U4D handoffs now distinguish current gates from historical
+  environment failures. Tracked changes at final documentation review are only
+  these four docs; the existing untracked private `.paperforge/` remains untouched.
+  No real paper, PDF pages, environment, cache, temporary DB or private log is
+  included. `git diff --check` passes. No merge/amend/history rewrite occurred.
+- Local status: **PUSH_READY_WITH_DOCUMENTED_LIMITATIONS**. Authorized branch
+  push is the next action. This is not tool freeze, remote review clearance,
+  merge authorization, scientific acceptance or publication release.
+- Remote automatic code/security reviews and all real-paper phases remain open.
+
+## First push and remote-review repair loop (2026-10-09)
+
+- Pushed and remotely verified exact SHA
+  `f7d8dd70c1fb9ff0f44e796305cce2991879f940`; PR #3 created and attached.
+  No merge occurred. Both Codex review requests were explicitly triggered after
+  inspecting initial remote activity; the summary identifies them as manual
+  requests. Copilot's separate quota refusal is not a review pass.
+- Read all seven Codex inline findings, not just completed state: six P1 and one
+  P2. Each is a valid correctness/approval/currentness blocker. Findings:
+  fact source semantics omitted; incomplete figure run-identity pairing; unchecked
+  ledger consumption; repeated old numbers bypass binding; missing artifact
+  members ignored; pending human records count as completed coverage; changed
+  target PDF still reports current. Four were also independently reproduced by
+  the local reviewer in temporary fixtures.
+- [Security review](https://github.com/QJHWC/PaperForge/pull/3#issuecomment-6078423453)
+  explicitly reports no security issues for `f7d8dd7`. This does not overrule the
+  seven code findings and does not certify subsequent commits.
+- Linux Python 3.11 CI: 755 passed, 7 platform/opt-in skips, 21 failures, all
+  missing `pdftoppm`. macOS 3.11: 757 passed, 5 skips, same 21 failures. The real
+  compute CI job completed successfully. Windows Python 3.11 subsequently finished
+  with 689 passed, 18 skips, 76 failures: missing Poppler plus actual byte/newline
+  and portable-path defects. These are not all environment failures.
+- Local commit `4506b8b` provisions Poppler on all three CI platforms and runs a
+  renderer preflight. Windows uses a fixed third-party Poppler packaging release
+  with a verified pinned SHA-256, not a claim of an upstream official build.
+  Independent config review approved; actual CI installation is still unverified.
+- Added 32 red-first regressions for the seven code findings. Current local
+  repair run: **815 collected, 810 passed, 5 skipped, 0 failed, 0 errors**;
+  Ruff PASS; configured mypy PASS (81 files). Publication, update and PDF repairs
+  independently reviewed and approved locally. No second push yet.
+- Tool freeze and real-paper phases remain pending. The next pushed SHA must
+  receive fresh code and security reviews; first-push results cannot be reused.
+
+## Cross-platform byte integrity repair (2026-10-09)
+
+- Windows CI exposed source hashes computed after universal-newline normalization.
+  Prose patch and ResultUpdate now decode the actual source bytes. Test approval
+  fixtures likewise bind actual bytes; outside-block equality remains exact.
+- Independent review reproduced an additional source-corruption bug: text-mode
+  temporary writes turn existing CRLF into CRCRLF on Windows, including rollback.
+  The shared atomic text writer now encodes explicitly and reuses the byte writer.
+  Windows-default newline simulation reproduced both real entrypoint failures
+  before repair; CRLF patch/apply and failed-registration rollback preserve bytes.
+- Imported source paths are validated against their raw canonical POSIX spelling,
+  not Windows-native backslash rendering. Six negative cases retain traversal,
+  noncanonical and alternate-stream rejection. SVG tests use a portable ID while
+  retaining quotes/angle-brackets/ampersands in adversarial series labels.
+- These repairs require the next real Windows CI run. Local OS success and the
+  focused newline simulation alone are not Windows certification.
+- Latest local run: **824 collected, 819 passed, 5 skipped, 0 failed, 0 collection
+  errors**, with the same five SWIG warnings. Whole-repository Ruff and configured
+  mypy (81 files) pass. Rebuilt sdist/wheel and official isolated wheel smoke pass.
+- Independent scoped review approved: 52 tests, changed-file Ruff and configured
+  mypy pass; no remaining HIGH/CRITICAL within this repair. Local push readiness
+  is restored, but no remote clearance or tool freeze is claimed.

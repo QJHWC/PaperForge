@@ -24,8 +24,27 @@ jobs:
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          sudo apt-get install -y bubblewrap poppler-utils
           sudo chmod u+s "$(command -v bwrap)"
+      - if: runner.os == 'macOS'
+        run: brew install poppler
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "poppler.zip"
+          $destination = Join-Path $env:RUNNER_TEMP "poppler"
+          Invoke-WebRequest "https://github.com/oschwartz10612/poppler-windows/releases/download/v26.09.0-0/Release-26.09.0-0.zip" -OutFile $archive
+          $expected = "7a6f256a0ddf7536182246a5733331bf4677cbcc34f4663774947ad34556c8d0"
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
+            throw "Poppler archive checksum mismatch"
+          }
+          Expand-Archive $archive -DestinationPath $destination
+          $bin = Join-Path $destination "poppler-26.09.0/Library/bin"
+          if (-not (Test-Path (Join-Path $bin "pdftoppm.exe"))) {
+            throw "Poppler renderer missing from verified archive"
+          }
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - run: pdftoppm -v
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m pip check

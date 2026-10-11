@@ -555,6 +555,21 @@ class PaperForgeService:
         state = self.workflow.get(run_id) if run_id else self.workflow.latest()
         return self._handle(state)
 
+    def unified_status(
+        self,
+        run_id: str | None = None,
+        process_payload: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Shared read-only projection for CLI/API/frontend. No side effects."""
+        from .run_status import build_unified_status
+
+        state = self.workflow.get(run_id) if run_id else self.workflow.latest()
+        handle = self._handle(state)
+        unified = build_unified_status(state, process_payload)
+        payload = handle.to_dict()
+        payload["unified"] = unified.to_dict()
+        return payload
+
     def resume(self, run_id: str | None = None) -> RunHandle:
         state = self.workflow.get(run_id) if run_id else self.workflow.latest()
         current = WorkflowStatus(state["status"])

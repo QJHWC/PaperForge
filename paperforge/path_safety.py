@@ -163,20 +163,25 @@ def atomic_write_text(
     *,
     encoding: str = "utf-8",
 ) -> Path:
+    # Source and artifact digests bind exact bytes on every platform.
+    return atomic_write_bytes(workspace, relative_path, content.encode(encoding))
+
+
+def atomic_write_bytes(
+    workspace: str | Path,
+    relative_path: str | Path,
+    content: bytes,
+) -> Path:
     target = safe_output_path(workspace, relative_path)
     temporary: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding=encoding,
-            dir=target.parent,
-            prefix=f".{target.name}.",
-            delete=False,
+            mode="wb", dir=target.parent, prefix=f".{target.name}.", delete=False,
         ) as stream:
+            temporary = stream.name
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
-            temporary = stream.name
         os.replace(temporary, target)
         temporary = None
     finally:
@@ -187,6 +192,7 @@ def atomic_write_text(
 
 __all__ = [
     "UnsafePathError",
+    "atomic_write_bytes",
     "atomic_write_text",
     "is_link_or_reparse_point",
     "reject_symlink_components",
