@@ -146,3 +146,30 @@ def test_explicit_statistical_superiority_requires_human_interpretation(text, ki
     results = review_claim(item, facts={"f": {}})
     assert next(r for r in results if r.check_type == "statistical_wording").status == "needs_human"
     assert coverage_gate([item], results)["c"]["verdict"] != "reviewed"
+
+
+@pytest.mark.parametrize("kind", ["descriptive_metric", "comparison"])
+@pytest.mark.parametrize("text", [
+    "A outperforms B (p=0.01).", "A outperforms B (p < .05).",
+    "P-value = 1e-3.", "p_value <= 0.05.", "The p value is 0.01.",
+    "A outperforms B (p\u22640.01).", r"A outperforms B ($p \leq 0.01$).",
+    r"A outperforms B ($p$ < 0.05).", r"A outperforms B ($p_{adj}=0.01$).",
+    r"A outperforms B ($p_{\mathrm{adj}}=0.01$).", r"A outperforms B ($\textit{p}=0.01$).",
+    r"A outperforms B ($p \approx 0.01$).",
+    "95% CI [0.01, 0.02].", "The confidence interval excludes zero.",
+    "The credible interval is narrow.", "We reject the null hypothesis.",
+])
+def test_explicit_statistical_results_require_human_interpretation(text, kind):
+    item = replace(claim(), text=text, claim_type=kind)
+    results = review_claim(item, facts={"f": {}})
+    assert next(r for r in results if r.check_type == "statistical_wording").status == "needs_human"
+    assert coverage_gate([item], results)["c"]["verdict"] != "reviewed"
+    if "interval" in text or "CI" in text:
+        family = "credible_interval" if "credible" in text else "confidence_interval"
+        assert check_statistical_binding(item, [replace(support(), analysis_type=family)]).status == "passed"
+        assert check_statistical_binding(item, [replace(support(), analysis_type="superiority")]).status != "passed"
+
+
+def test_ordinary_ci_workflow_text_is_not_statistical_claim():
+    item = replace(claim(), text="The CI workflow completed.", claim_type="descriptive_metric")
+    assert coverage_gate([item], review_claim(item, facts={"f": {}}))["c"]["verdict"] == "reviewed"

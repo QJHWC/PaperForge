@@ -7,8 +7,8 @@
 - 仓库：`/Users/qjhwc/Desktop/PaperForge/PaperForge-github`。
 - 审查开始时，本地 HEAD 与通过 GitHub API 查询的 main 一致：`fb4195914c4988678eccc0b8be60bc7a458c78d7`。
 - 本地工作分支：`audit/full-review-2026-10-13`。上述 SHA 是修复前基线，不是修复后提交。下述本地门禁记录是提交前快照；远端结果以 PR 的精确 head SHA 为准。
-- 修复 4 类可复现问题及远端 follow-up，优化 1 处图表配对热点，新增 74 个回归测试案例。
-- 最终本地全量测试：912 个案例，**907 passed / 5 skipped / 0 failed / 0 collection errors**，5 个 SWIG 弃用警告。首次提交前的结果为 865 passed / 5 skipped。
+- 修复 4 类可复现问题及远端 follow-up，优化 1 处图表配对热点，新增 107 个回归测试案例。
+- 最终本地全量测试：945 个案例，**940 passed / 5 skipped / 0 failed / 0 collection errors**，5 个 SWIG 弃用警告。首次提交前的结果为 865 passed / 5 skipped。
 - Ruff、mypy、依赖一致性、sdist/wheel 构建、隔离安装后的 wheel 验证通过。
 - 独立 Python 代码复核覆盖本轮生产修改，未发现剩余 HIGH/CRITICAL；这不等于远端 Codex Security 对当前修改已出具报告。
 
@@ -26,14 +26,14 @@
 
 修复：
 
-- checker 版本升级至 `paperforge.science-checkers/v5`（首次修复为 v2，分析类型绑定为 v3，名词/排版字符为 v4，显式 statistical/superiority 家族为 v5）。
+- checker 版本升级至 `paperforge.science-checkers/v6`（首次修复为 v2，分析类型绑定为 v3，名词/排版字符为 v4，显式 statistical/superiority 为 v5，p-value/区间及受限数学格式为 v6）。
 - 使用 claim qualifiers 中明确的 `evidence_ids`，要求非空且完整匹配；完整 subjects 和 metric/dataset/split 同步匹配。
 - 要求非空分析类型、方法、版本和 result，以及合法格式的源文件 SHA-256；声明 observation digest 时必须一致。
 - 等效性/非劣效性要求匹配分析类型和有限、正值、相等的 margin。
 - 类型分类和统计措辞共同决定必须运行的检查，防止把统计 claim 标成描述性 claim 绕过 gate。
 - **元数据绑定通过不等于科学解释通过。所有统计解释仍为 `needs_human`，不得伪造人工确认。**
 
-回归：`tests/test_audit_statistical_support.py`，57 个案例，包含分析类型、名词措辞、排版字符及显式统计优越性案例；同时更新旧的名称即通过测试及完整绑定 fixture。负例先在修复前失败，再验证修复。
+回归：`tests/test_audit_statistical_support.py`，90 个案例，包含分析类型、名词措辞、排版字符、显式统计优越性、p-value/区间及数学格式案例；同时更新旧的名称即通过测试及完整绑定 fixture。负例先在修复前失败，再验证修复。
 
 兼容性：保留旧名称参数，但不再把名称作为自动放行依据。调用者需要通过 `statistical_evidence` 提供类型化支持，并在 qualifiers 中提供 metric、dataset、split、evidence_ids、必要的 margin；仍需真正的人工统计解释流程。此检查只校验元数据关联，不验证实际分析文件字节或统计方法有效性。
 
@@ -97,7 +97,7 @@ git diff --check
 
 | 门禁 | 本轮结果 |
 | --- | --- |
-| 全量 pytest | 907 passed，5 skipped，0 failed，0 collection errors |
+| 全量 pytest | 940 passed，5 skipped，0 failed，0 collection errors |
 | 跳过归因 | Docker 1、OpenSSH 2、Slurm 1、Kubernetes 1；真实集成 gate 未启用 |
 | 警告 | 5 个 SWIG/PyMuPDF 绑定弃用警告，未隐藏 |
 | Ruff | All checks passed |
@@ -107,7 +107,7 @@ git diff --check
 | verify_wheel | 隔离安装并验证成功，退出码 0 |
 | diff whitespace | 通过 |
 
-初次基线运行未激活 venv PATH：831 passed / 5 skipped / 2 failed / 0 collection errors；两项失败均因子进程找不到 `python`。使用 venv PATH 后完整执行通过，没有修改计算代码或删减断言来掩盖环境失败。基线共有 838 个案例，首次新增 32 个；随后远端 follow-up 新增 42 个，总计新增 74 个、共 912 个。
+初次基线运行未激活 venv PATH：831 passed / 5 skipped / 2 failed / 0 collection errors；两项失败均因子进程找不到 `python`。使用 venv PATH 后完整执行通过，没有修改计算代码或删减断言来掩盖环境失败。基线共有 838 个案例，首次新增 32 个；随后远端 follow-up 新增 75 个，总计新增 107 个、共 945 个。
 
 ## 审查范围与未验证事项
 
@@ -151,6 +151,14 @@ git diff --check
 `df04c5cfcbd8a26965d354e0519e893964d168ea` 的代码审查仍发现一项 P1：错误标成 descriptive/comparison 的 statistically superior 或 statistical superiority 未被触发词识别。继续保持不合并。
 
 修复为在共享分类中加入 `statistic` 和 `superior` 词干，checker v5，保守地增加需要人工解释的措辞范围。新增 6 个描述性/比较类型的反例，修复前全部失败；修复后 audit/core/finalization 共 98 passed，独立复核通过。没有改变原始文本，也未弱化人工解释或类型绑定要求。后续 head 再次需要精确 SHA 的全量 CI 和双审，无旧结果复用。
+
+### 第四轮代码审查：p-value 与常见数学格式
+
+`8217ee8d5fccf19364b7cfa18d08f8165e2df1c2` 的 push/PR CI 共 20 个 jobs 全部通过，自动安全审查明确 no issues；代码审查仍有一项 P1：`p=0.01` 记号绕过分类。因此仍未合并。
+
+checker v6 增加共享 p-value（ASCII/Unicode/受限 LaTeX 比较符）及百分比 CI 模式，以及明确的 confidence/credible interval、null hypothesis 等统计措辞。区间绑定使用相应 confidence_interval/credible_interval 分析家族，不允许用 superiority 元数据替代。
+
+独立复核继续指出 `$p$ < 0.05` 和 `p_{adj}` 的常见数学格式；在仅分类视图中去掉数学定界符、展开受限单层字体宏，支持有界下标及近似比较符，不修改原文、不执行 TeX。新增 33 个案例：第一批 22 failed / 1 passed（普通 CI workflow 不误判）；随后数学格式 10 failed / 22 passed；修复后 audit/core/finalization 共 131 passed。新 head 仍须重新通过 CI 和双审，不能复用 8217ee8 的安全结论。
 
 历史 PR #3 最终 head 为 `a34562afa2e318517a8439328fb13a9681683f05`，已经合并；最后可见的实际代码/安全审查针对旧 SHA `0af125a`，最终 head 的审查尝试因额度限制跳过。见[额度限制记录](https://github.com/QJHWC/PaperForge/pull/3#issuecomment-6100000612)及[后续记录](https://github.com/QJHWC/PaperForge/pull/3#issuecomment-6100292621)。因此历史合并不能当作最新 main 或本轮修改已通过远端安全审查的证据。
 

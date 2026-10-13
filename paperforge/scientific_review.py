@@ -17,14 +17,21 @@ CLAIM_TYPES = (
     "causal_attribution", "protocol_statement", "limitation",
 )
 
-CHECKER_VERSION = "paperforge.science-checkers/v5"
+CHECKER_VERSION = "paperforge.science-checkers/v6"
 RULE_PACK_SCHEMA = "paperforge.science-review-rules/v1"
 REVIEW_BUNDLE_SCHEMA = "paperforge.scientific-review-bundle/v1"
 _STATISTICAL_TYPES = {"statistical_superiority", "statistical_equivalence", "stability"}
 _EQUIVALENCE_TRIGGERS = ("equivalen", "statistically indistinguishable")
 _STABILITY_TRIGGERS = ("robust", "stable", "stabil")
-_STATISTICAL_TRIGGERS = ("statistic", "superior", "significan", *_EQUIVALENCE_TRIGGERS, *_STABILITY_TRIGGERS)
+_STATISTICAL_TRIGGERS = ("statistic", "superior", "significan", "p-value", "p value", "p_value",
+                         "confidence interval", "credible interval", "hypothesis test", "null hypothesis",
+                         *_EQUIVALENCE_TRIGGERS, *_STABILITY_TRIGGERS)
 _NONINFERIORITY_PATTERN = re.compile(r"\bnon[\s-]*inferior")
+_P_VALUE_PATTERN = re.compile(
+    r"\bp(?:[\s_-]*value)?(?:\s*_\s*(?:\{[^{}\n]{1,64}\}|[a-z0-9]{1,32}))?"
+    r"\s*(?:[<=>~\u2264\u2265\u2248]+|\\(?:leq?|geq?|lt|gt|approx|sim|simeq))"
+    r"\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)")
+_INTERVAL_PATTERN = re.compile(r"\b(?:\d+(?:\.\d+)?\s*(?:%|\\%)\s*ci\b|(?:confidence|credible)\s+interval\b)")
 
 
 class ScientificReviewError(RuntimeError):
@@ -267,6 +274,8 @@ def _statistical_text(claim: ScientificClaim) -> str:
     # Classification only: preserve original claim/source bytes and displayed characters.
     text = unicodedata.normalize("NFKC", claim.text).casefold()
     text = "".join(char for char in text if unicodedata.category(char) != "Cf")
+    text = re.sub(r"(?<!\\)\$+|\\[()[\]]", "", text)
+    text = re.sub(r"\\(?:mathrm|mathbf|mathit|operatorname|text|textrm|textit|textbf)\s*\{([^{}]*)\}", r"\1", text)
     return text.translate({ord(char): "-" for char in "\u2010\u2011\u2012\u2013\u2014\u2212"})
 
 
@@ -274,6 +283,8 @@ def _is_statistical_claim(claim: ScientificClaim) -> bool:
     text = _statistical_text(claim)
     return (claim.claim_type in _STATISTICAL_TYPES
             or bool(_NONINFERIORITY_PATTERN.search(text))
+            or bool(_P_VALUE_PATTERN.search(text))
+            or bool(_INTERVAL_PATTERN.search(text))
             or any(trigger in text for trigger in _STATISTICAL_TRIGGERS))
 
 
@@ -440,6 +451,10 @@ def check_statistical_binding(
         allowed_analysis_types = {"equivalence", "tost"}
     elif claim.claim_type == "stability" or any(trigger in lowered for trigger in _STABILITY_TRIGGERS):
         allowed_analysis_types = {"stability", "robustness"}
+    elif claim.claim_type == "statistical_superiority" or "superior" in lowered:
+        allowed_analysis_types = {"superiority"}
+    elif _INTERVAL_PATTERN.search(lowered):
+        allowed_analysis_types = {"credible_interval"} if "credible" in lowered else {"confidence_interval"}
     else:
         allowed_analysis_types = {"superiority", "significance"}
     # Contradictory type/text must not bind an analysis from another family.
