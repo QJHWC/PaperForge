@@ -5,6 +5,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -15,9 +16,12 @@ CLAIM_TYPES = (
     "causal_attribution", "protocol_statement", "limitation",
 )
 
-CHECKER_VERSION = "paperforge.science-checkers/v1"
+CHECKER_VERSION = "paperforge.science-checkers/v2"
 RULE_PACK_SCHEMA = "paperforge.science-review-rules/v1"
 REVIEW_BUNDLE_SCHEMA = "paperforge.scientific-review-bundle/v1"
+_STATISTICAL_TYPES = {"statistical_superiority", "statistical_equivalence", "stability"}
+_STATISTICAL_TRIGGERS = ("significant", "equivalent", "non-inferior", "noninferior",
+                         "robust", "stable", "statistically indistinguishable")
 
 
 class ScientificReviewError(RuntimeError):
@@ -256,18 +260,18 @@ def check_calibration_overlap(claim: ScientificClaim, facts: Mapping[str, Mappin
                    facts_used=tuple(claim.fact_ids))
 
 
+def _is_statistical_claim(claim: ScientificClaim) -> bool:
+    return claim.claim_type in _STATISTICAL_TYPES or any(
+        trigger in claim.text.lower() for trigger in _STATISTICAL_TRIGGERS)
+
+
 def check_statistical_wording(claim: ScientificClaim, statistical_artifacts: Sequence[str] | None = None) -> ScientificCheckResult:
-    lowered = claim.text.lower()
-    triggers = ("significant", "statistically significant", "equivalent", "non-inferior",
-                "robust", "stable", "statistically indistinguishable")
-    if not any(trigger in lowered for trigger in triggers):
+    if not _is_statistical_claim(claim):
         return _result("statistical_wording", claim.claim_id, "passed", "no statistical wording",
                        facts_used=tuple(claim.fact_ids))
-    if statistical_artifacts:
-        return _result("statistical_wording", claim.claim_id, "passed", "typed statistical support present",
-                       facts_used=tuple(claim.fact_ids))
+    # Matching metadata binds an analysis, not its scientific interpretation.
     return _result("statistical_wording", claim.claim_id, "needs_human",
-                   "means/std with few seeds cannot support significance/equivalence; missing statistical artifact",
+                   "statistical interpretation requires human review; artifact names or matching metadata are insufficient",
                    facts_used=tuple(claim.fact_ids),
                    missing_evidence=("statistical_test_result",), severity="major")
 
@@ -326,17 +330,21 @@ def review_claim(
     rule_pack: ScienceRulePack | None = None,
     calibration_roles: Mapping[str, str] | None = None,
     statistical_artifacts: Sequence[str] | None = None,
+    statistical_evidence: Sequence[StatisticalEvidence | Mapping[str, Any]] | None = None,
     evidence_scope: Mapping[str, Any] | None = None,
     citation_support: Mapping[str, Any] | None = None,
     ledger_ids: Sequence[str] | None = None,
 ) -> list[ScientificCheckResult]:
     fact_map = dict(facts or {})
+    statistical_binding = check_statistical_binding(claim, statistical_evidence)
+    wording = check_statistical_wording(claim, statistical_artifacts)
     return [
         check_layer_consistency(claim, fact_map),
         check_derived_dependency(claim, fact_map, rule_pack),
         check_comparison_compatibility(claim, fact_map, rule_pack),
         check_calibration_overlap(claim, fact_map, calibration_roles),
-        check_statistical_wording(claim, statistical_artifacts),
+        wording,
+        statistical_binding,
         check_scope(claim, evidence_scope),
         check_causal_attribution(claim, fact_map),
         check_citation_support(claim, citation_support),
@@ -357,9 +365,9 @@ REQUIRED_CHECKS: dict[str, tuple[str, ...]] = {
     "descriptive_metric": ("layer_consistency",),
     "comparison": ("layer_consistency", "comparison_compatibility"),
     "ranking": ("layer_consistency", "comparison_compatibility"),
-    "statistical_superiority": ("comparison_compatibility", "statistical_wording"),
-    "statistical_equivalence": ("comparison_compatibility", "statistical_wording"),
-    "stability": ("statistical_wording",),
+    "statistical_superiority": ("comparison_compatibility", "statistical_wording", "statistical_binding"),
+    "statistical_equivalence": ("comparison_compatibility", "statistical_wording", "statistical_binding"),
+    "stability": ("statistical_wording", "statistical_binding"),
     "hardware_measurement": ("layer_consistency",),
     "hardware_validation": ("layer_consistency", "scope"),
     "derived_metric_statement": ("derived_dependency", "layer_consistency"),
@@ -408,29 +416,48 @@ def check_statistical_binding(
 ) -> ScientificCheckResult:
     """Strict binding: artifact must match this claim's metric/groups/data/margin."""
     lowered = claim.text.lower()
-    needs_stats = any(word in lowered for word in (
-        "significant", "statistically significant", "equivalent", "non-inferior",
-        "noninferior", "robust", "stable"))
     needs_equivalence = "equivalent" in lowered or claim.claim_type == "statistical_equivalence"
     needs_noninferiority = "non-inferior" in lowered or "noninferior" in lowered
-    if not needs_stats and claim.claim_type not in {
-        "statistical_superiority", "statistical_equivalence", "stability"}:
+    if not _is_statistical_claim(claim):
         return _result("statistical_binding", claim.claim_id, "passed", "no statistical claim",
                        facts_used=tuple(claim.fact_ids))
-    claim_evidence = {str(fid) for fid in claim.fact_ids if str(fid).strip()}
+    def string_set(value: Any) -> set[str]:
+        if not isinstance(value, list | tuple | set | frozenset):
+            return set()
+        return {str(item) for item in value if str(item).strip()}
+
+    qualifiers = dict(claim.qualifiers)
+    claim_evidence = string_set(qualifiers.get("evidence_ids"))
+    claim_subjects = {str(s).casefold() for s in claim.subjects if str(s).strip()}
     for entry in statistical_evidence or []:
-        data = entry.to_dict() if isinstance(entry, StatisticalEvidence) else dict(entry)
-        # Evidence set must overlap the claim's facts; unrelated analyses never bind.
-        evidence_set = {str(eid) for eid in data.get("evidence_ids") or []}
-        if claim_evidence and evidence_set and not (claim_evidence & evidence_set):
+        if not isinstance(entry, StatisticalEvidence | Mapping):
             continue
-        # Metric / subjects / dataset / split must match the claim context.
-        claim_subjects = {str(s).lower() for s in claim.subjects if str(s).strip()}
-        evidence_subjects = {str(s).lower() for s in data.get("subjects") or []}
-        if claim_subjects and evidence_subjects and not (claim_subjects & evidence_subjects):
+        data = entry.to_dict() if isinstance(entry, StatisticalEvidence) else dict(entry)
+        evidence_subjects = {s.casefold() for s in string_set(data.get("subjects"))}
+        if (not claim_evidence or claim_evidence != string_set(data.get("evidence_ids"))
+                or not claim_subjects or claim_subjects != evidence_subjects):
+            continue
+        if any(not str(qualifiers.get(key) or "").strip()
+               or str(qualifiers[key]) != str(data.get(key) or "")
+               for key in ("metric", "dataset", "split")):
+            continue
+        if (any(not str(data.get(key) or "").strip()
+                for key in ("analysis_type", "method", "method_version", "result"))
+                or not re.fullmatch(r"[0-9a-fA-F]{64}", str(data.get("source_artifact_hash") or ""))):
+            continue
+        if qualifiers.get("observation_set_digest") and qualifiers["observation_set_digest"] != data.get("observation_set_digest"):
             continue
         if needs_equivalence or needs_noninferiority:
-            if not str(data.get("margin") or "").strip():
+            try:
+                margin = Decimal(str(data.get("margin") or ""))
+                expected_margin = Decimal(str(qualifiers.get("margin") or ""))
+            except InvalidOperation:
+                continue
+            if not margin.is_finite() or margin <= 0 or margin != expected_margin:
+                continue
+            analysis_type = str(data.get("analysis_type") or "").lower()
+            allowed = {"noninferiority", "non-inferiority"} if needs_noninferiority else {"equivalence", "tost"}
+            if analysis_type not in allowed:
                 continue
             return _result("statistical_binding", claim.claim_id, "passed",
                            "equivalence/non-inferiority analysis with explicit margin bound",
@@ -467,6 +494,8 @@ def coverage_gate(
         if required is None:
             verdicts[claim.claim_id] = {"verdict": "needs_human", "reason": "UNCLASSIFIED_SCIENTIFIC_CLAIM"}
             continue
+        if _is_statistical_claim(claim):
+            required = tuple(dict.fromkeys((*required, "statistical_wording", "statistical_binding")))
         ran = {r.check_type for r in by_claim.get(claim.claim_id, [])}
         missing = [check for check in required if check not in ran]
         if missing:

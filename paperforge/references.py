@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import io
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree as ET
+from zipfile import BadZipFile, ZipFile
 
 from .path_safety import reject_symlink_components
 
@@ -13,6 +16,7 @@ _ALLOWED_SUFFIXES = frozenset({".bib", ".docx", ".md", ".pdf", ".rst", ".tex", "
 # Conservative default when callers do not supply an explicit budget.
 # Reference truncation is explicit + auditable (never silent).
 DEFAULT_REFERENCE_BUDGET_BYTES = 48 * 1024
+MAX_DOCX_XML_BYTES = 8 * 1024 * 1024
 
 
 class ReferenceError(RuntimeError):
@@ -167,6 +171,34 @@ def _extract_pdf(
     return "", False, None, None, True, (detail or "no extractable text; likely scanned")
 
 
+def _extract_docx(data: bytes, *, budget_bytes: int) -> tuple[str, bool, int, bool, str]:
+    """Read only bounded main-body XML; never extract ZIP paths or relationships."""
+    try:
+        with ZipFile(io.BytesIO(data)) as package:
+            members = [item for item in package.infolist() if item.filename == "word/document.xml"]
+            if len(members) != 1 or members[0].file_size > MAX_DOCX_XML_BYTES:
+                raise ValueError("missing, duplicate or oversized document XML")
+            with package.open(members[0]) as source:
+                xml = source.read(MAX_DOCX_XML_BYTES + 1)
+            if len(xml) > MAX_DOCX_XML_BYTES:
+                raise ValueError("oversized document XML")
+        decoded = xml.decode("utf-8-sig")
+        if "<!DOCTYPE" in decoded.upper() or "<!ENTITY" in decoded.upper():
+            raise ValueError("XML entities are not accepted")
+        tree = ET.fromstring(decoded)
+        namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        paragraphs = ["".join(node.text or "" for node in paragraph.iter(namespace + "t"))
+                      for paragraph in tree.iter(namespace + "p")]
+        body = "\n".join(text for text in paragraphs if text.strip()).encode("utf-8")
+        if not body:
+            raise ValueError("no extractable main-body text")
+        text, truncated, read = _read_text_with_budget(body, budget_bytes=budget_bytes)
+        return text, truncated, read, False, (
+            "DOCX main-body text only; bytes_read counts extracted UTF-8; total_bytes counts ZIP bytes")
+    except (BadZipFile, KeyError, ValueError, ET.ParseError, OSError, RuntimeError, NotImplementedError):
+        return "", False, 0, True, "DOCX main-body text unavailable or unsafe; manual review required"
+
+
 class ReferenceLoader:
     """Load reference_paths into audited excerpts. Materials are untrusted."""
 
@@ -195,6 +227,14 @@ class ReferenceLoader:
             sha = hashlib.sha256(data).hexdigest()
             source_id = _stable_source_id(relative, sha)
             suffix = Path(relative).suffix.lower()
+            if suffix == ".docx":
+                text, truncated, read, needs_human, detail = _extract_docx(data, budget_bytes=per_file)
+                excerpts.append(ReferenceExcerpt(
+                    source_id=source_id, path=relative, sha256=sha, total_bytes=total,
+                    bytes_read=read, truncated=truncated, excerpt=text,
+                    line_start=1 if text else None, line_end=len(text.splitlines()) if text else None,
+                    needs_human_review=needs_human, detail=detail))
+                continue
             if suffix == ".pdf":
                 text, truncated, ps, pe, needs_human, detail = _extract_pdf(
                     data, budget_bytes=per_file

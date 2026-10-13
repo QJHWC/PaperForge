@@ -153,7 +153,7 @@ class WritingEngine:
             source, relative = self._workspace_document(str(raw_source))
             if not source.is_file():
                 raise FileNotFoundError(source)
-            return source, relative, source.read_text(encoding="utf-8")
+            return source, relative, source.read_bytes().decode("utf-8")
         safe_run_id = _SAFE_RUN_ID.sub("-", run_id).strip(".-_") or "draft"
         relative = f".paperforge/drafts/{safe_run_id}.tex"
         target, relative = self._workspace_document(relative)
@@ -317,7 +317,7 @@ class WritingEngine:
         written = self.workspace / relative_path
         try:
             after_sha256 = protected_blocks_sha256(
-                written.read_text(encoding="utf-8")
+                written.read_bytes().decode("utf-8")
             )
             if after_sha256 != before_sha256:
                 raise WritingSafetyError(

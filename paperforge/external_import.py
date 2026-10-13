@@ -720,7 +720,7 @@ def approve_import(
     for entry in manifest.get("sources") or []:
         rel = str(entry.get("path") or "")
         expected = str(entry.get("sha256") or "")
-        candidate = sources_dir.parent / rel
+        candidate = reject_symlink_components(sources_dir.parent / rel, anchor=sources_dir.parent)
         if not candidate.is_file():
             raise ApprovalError(f"source missing at approval: {rel}")
         if hashlib.sha256(candidate.read_bytes()).hexdigest() != expected.lower():
@@ -806,9 +806,12 @@ def approval_valid(workspace: str | Path, memory: Any, import_id: str) -> tuple[
     for entry in manifest.get("sources") or []:
         rel = str(entry.get("path") or "")
         expected = str(entry.get("sha256") or "")
-        candidate = sources_dir.parent / rel
-        if not candidate.is_file() or hashlib.sha256(candidate.read_bytes()).hexdigest() != expected.lower():
-            return False, f"source changed: {rel}"
+        try:
+            candidate = reject_symlink_components(sources_dir.parent / rel, anchor=sources_dir.parent)
+            if not candidate.is_file() or hashlib.sha256(candidate.read_bytes()).hexdigest() != expected.lower():
+                return False, f"source changed: {rel}"
+        except (OSError, ValueError):
+            return False, f"source missing or unsafe: {rel}"
     return True, "approval valid"
 
 
@@ -1083,10 +1086,16 @@ def reconcile_imports(workspace: str | Path, memory: Any, *, repair: bool = Fals
             try:
                 evidence = evidence_by_id[eid]
                 meta = json.loads(evidence["metadata_json"])
-                manifest_path = root / ".paperforge/imports" / row["import_id"] / "manifest.json"
+                manifest_path, _, sources_dir = _import_paths(root, str(row["import_id"]))
                 manifest, manifest_sha = _read_canonical_manifest(manifest_path)
                 source = next((s for s in manifest.get("sources", [])
                                if s.get("path") == meta.get("source_relpath")), None)
+                if source:
+                    source_path = reject_symlink_components(
+                        sources_dir.parent / str(source.get("path") or ""), anchor=sources_dir.parent)
+                    if hashlib.sha256(source_path.read_bytes()).hexdigest() != source.get("sha256"):
+                        orphan_materializations.append(key)
+                        break
                 if (meta.get("materialization_key") != key or meta.get("import_id") != row["import_id"]
                         or evidence["content_sha256"] != hashlib.sha256(evidence["excerpt"].encode()).hexdigest()
                         or meta.get("manifest_sha256") != row["manifest_sha256"] or manifest_sha != row["manifest_sha256"]

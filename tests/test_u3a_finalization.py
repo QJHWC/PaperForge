@@ -89,10 +89,14 @@ def _stat_claim(cid="e", text="Equivalent performance.", facts=("f",)):
 
 
 def test_equivalence_margins() -> None:  # 14,15,16,17
-    claim = _claim(cid="e", text="Equivalent performance.", claim_type="statistical_equivalence", facts=("f",))
+    claim = ScientificClaim("e", "Equivalent performance.", "statistical_equivalence",
+                            subjects=("A", "B"), fact_ids=("f",), qualifiers={
+                                "metric": "m", "dataset": "d", "split": "s",
+                                "evidence_ids": ["f", "e1"], "margin": "0.01"})
     assert check_statistical_binding(claim, []).status == "failed"
     good = StatisticalEvidence(analysis_type="equivalence", metric="m", subjects=("A", "B"), dataset="d", split="s",
-                               evidence_ids=("f", "e1"), method="TOST", method_version="v1", result="pass", margin="0.01")
+                               evidence_ids=("f", "e1"), method="TOST", method_version="v1", result="pass", margin="0.01",
+                               source_artifact_hash="a" * 64)
     assert check_statistical_binding(claim, [good]).status == "passed"
     claim_ni = _claim(cid="n", text="Non-inferior.", claim_type="statistical_equivalence", facts=("f",))
     assert check_statistical_binding(claim_ni, []).status == "failed"
