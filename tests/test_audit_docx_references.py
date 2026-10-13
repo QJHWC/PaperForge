@@ -45,3 +45,15 @@ def test_docx_budget_truncates_extracted_text_explicitly(tmp_path):
     assert item.excerpt == "Useful"
     assert item.truncated is True
     assert item.bytes_read == 6
+
+
+@pytest.mark.parametrize("control,separator", [("tab", "\t"), ("br", "\n"), ("cr", "\n")])
+def test_docx_preserves_inline_control_boundaries(tmp_path, control, separator):
+    raw = archive(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:p><w:r><w:t>alpha</w:t>'
+        f'<w:{control}/><w:t>beta</w:t></w:r></w:p></w:body></w:document>')
+    (tmp_path / "ref.docx").write_bytes(raw)
+    item = ReferenceLoader(tmp_path).load(["ref.docx"]).excerpts[0]
+    assert item.excerpt == f"alpha{separator}beta"
+    assert item.needs_human_review is False

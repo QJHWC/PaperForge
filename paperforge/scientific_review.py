@@ -16,7 +16,7 @@ CLAIM_TYPES = (
     "causal_attribution", "protocol_statement", "limitation",
 )
 
-CHECKER_VERSION = "paperforge.science-checkers/v2"
+CHECKER_VERSION = "paperforge.science-checkers/v3"
 RULE_PACK_SCHEMA = "paperforge.science-review-rules/v1"
 REVIEW_BUNDLE_SCHEMA = "paperforge.scientific-review-bundle/v1"
 _STATISTICAL_TYPES = {"statistical_superiority", "statistical_equivalence", "stability"}
@@ -416,11 +416,27 @@ def check_statistical_binding(
 ) -> ScientificCheckResult:
     """Strict binding: artifact must match this claim's metric/groups/data/margin."""
     lowered = claim.text.lower()
-    needs_equivalence = "equivalent" in lowered or claim.claim_type == "statistical_equivalence"
+    needs_equivalence = ("equivalent" in lowered or "statistically indistinguishable" in lowered
+                         or claim.claim_type == "statistical_equivalence")
     needs_noninferiority = "non-inferior" in lowered or "noninferior" in lowered
     if not _is_statistical_claim(claim):
         return _result("statistical_binding", claim.claim_id, "passed", "no statistical claim",
                        facts_used=tuple(claim.fact_ids))
+    if needs_noninferiority:
+        allowed_analysis_types = {"noninferiority", "non-inferiority"}
+    elif needs_equivalence:
+        allowed_analysis_types = {"equivalence", "tost"}
+    elif claim.claim_type == "stability" or "robust" in lowered or "stable" in lowered:
+        allowed_analysis_types = {"stability", "robustness"}
+    else:
+        allowed_analysis_types = {"superiority", "significance"}
+    # Contradictory type/text must not bind an analysis from another family.
+    if claim.claim_type == "statistical_superiority":
+        allowed_analysis_types &= {"superiority"}
+    elif claim.claim_type == "statistical_equivalence":
+        allowed_analysis_types &= {"equivalence", "tost"}
+    elif claim.claim_type == "stability":
+        allowed_analysis_types &= {"stability", "robustness"}
     def string_set(value: Any) -> set[str]:
         if not isinstance(value, list | tuple | set | frozenset):
             return set()
@@ -447,6 +463,8 @@ def check_statistical_binding(
             continue
         if qualifiers.get("observation_set_digest") and qualifiers["observation_set_digest"] != data.get("observation_set_digest"):
             continue
+        if str(data.get("analysis_type") or "").strip().lower() not in allowed_analysis_types:
+            continue
         if needs_equivalence or needs_noninferiority:
             try:
                 margin = Decimal(str(data.get("margin") or ""))
@@ -454,10 +472,6 @@ def check_statistical_binding(
             except InvalidOperation:
                 continue
             if not margin.is_finite() or margin <= 0 or margin != expected_margin:
-                continue
-            analysis_type = str(data.get("analysis_type") or "").lower()
-            allowed = {"noninferiority", "non-inferiority"} if needs_noninferiority else {"equivalence", "tost"}
-            if analysis_type not in allowed:
                 continue
             return _result("statistical_binding", claim.claim_id, "passed",
                            "equivalence/non-inferiority analysis with explicit margin bound",

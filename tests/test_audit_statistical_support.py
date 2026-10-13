@@ -71,3 +71,25 @@ def test_statistical_gate_cannot_be_bypassed_by_claim_classification(text, kind,
     item = replace(claim(), text=text, claim_type=kind)
     results = review_claim(item, facts={"f": {}}, statistical_evidence=[support()])
     assert coverage_gate([item], results)["c"]["verdict"] == expected
+
+
+@pytest.mark.parametrize("text,kind,analysis_type,passes", [
+    ("A exceeds B.", "statistical_superiority", "equivalence", False),
+    ("A exceeds B.", "statistical_superiority", "stability", False),
+    ("A remains stable.", "stability", "superiority", False),
+    ("A remains stable.", "stability", "equivalence", False),
+    ("A exceeds B.", "statistical_superiority", "superiority", True),
+    ("A remains stable.", "stability", "stability", True),
+    ("A remains robust.", "stability", "robustness", True),
+    ("Statistically indistinguishable.", "descriptive_metric", "equivalence", True),
+    ("Significantly better.", "comparison", "equivalence", False),
+    ("A is non-inferior to B.", "statistical_equivalence", "noninferiority", False),
+])
+def test_statistical_analysis_type_matches_claim_intent(text, kind, analysis_type, passes):
+    item = replace(claim(), text=text, claim_type=kind)
+    result = check_statistical_binding(item, [replace(support(), analysis_type=analysis_type)])
+    assert (result.status == "passed") is passes
+    if passes:
+        results = review_claim(item, facts={"f": {}},
+                               statistical_evidence=[replace(support(), analysis_type=analysis_type)])
+        assert coverage_gate([item], results)["c"]["verdict"] == "needs_human"

@@ -187,7 +187,9 @@ def _extract_docx(data: bytes, *, budget_bytes: int) -> tuple[str, bool, int, bo
             raise ValueError("XML entities are not accepted")
         tree = ET.fromstring(decoded)
         namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
-        paragraphs = ["".join(node.text or "" for node in paragraph.iter(namespace + "t"))
+        separators = {namespace + "tab": "\t", namespace + "br": "\n", namespace + "cr": "\n"}
+        paragraphs = ["".join(node.text or "" if node.tag == namespace + "t"
+                              else separators.get(node.tag, "") for node in paragraph.iter())
                       for paragraph in tree.iter(namespace + "p")]
         body = "\n".join(text for text in paragraphs if text.strip()).encode("utf-8")
         if not body:

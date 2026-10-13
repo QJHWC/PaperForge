@@ -7,8 +7,8 @@
 - 仓库：`/Users/qjhwc/Desktop/PaperForge/PaperForge-github`。
 - 审查开始时，本地 HEAD 与通过 GitHub API 查询的 main 一致：`fb4195914c4988678eccc0b8be60bc7a458c78d7`。
 - 本地工作分支：`audit/full-review-2026-10-13`。上述 SHA 是修复前基线，不是修复后提交。下述本地门禁记录是提交前快照；远端结果以 PR 的精确 head SHA 为准。
-- 修复 4 类可复现问题，优化 1 处图表配对热点，新增 32 个回归测试案例。
-- 最终全量测试：870 个案例，**865 passed / 5 skipped / 0 failed / 0 collection errors**，5 个 SWIG 弃用警告。
+- 修复 4 类可复现问题及远端 follow-up，优化 1 处图表配对热点，新增 48 个回归测试案例。
+- 最终本地全量测试：886 个案例，**881 passed / 5 skipped / 0 failed / 0 collection errors**，5 个 SWIG 弃用警告。首次提交前的结果为 865 passed / 5 skipped。
 - Ruff、mypy、依赖一致性、sdist/wheel 构建、隔离安装后的 wheel 验证通过。
 - 独立 Python 代码复核覆盖本轮生产修改，未发现剩余 HIGH/CRITICAL；这不等于远端 Codex Security 对当前修改已出具报告。
 
@@ -26,14 +26,14 @@
 
 修复：
 
-- checker 版本升级至 `paperforge.science-checkers/v2`。
+- checker 版本升级至 `paperforge.science-checkers/v3`（首次修复为 v2，分析类型绑定 follow-up 再升级为 v3）。
 - 使用 claim qualifiers 中明确的 `evidence_ids`，要求非空且完整匹配；完整 subjects 和 metric/dataset/split 同步匹配。
 - 要求非空分析类型、方法、版本和 result，以及合法格式的源文件 SHA-256；声明 observation digest 时必须一致。
 - 等效性/非劣效性要求匹配分析类型和有限、正值、相等的 margin。
 - 类型分类和统计措辞共同决定必须运行的检查，防止把统计 claim 标成描述性 claim 绕过 gate。
 - **元数据绑定通过不等于科学解释通过。所有统计解释仍为 `needs_human`，不得伪造人工确认。**
 
-回归：`tests/test_audit_statistical_support.py`，23 个案例；同时更新旧的名称即通过测试及完整绑定 fixture。负例先在修复前失败，再验证修复。
+回归：`tests/test_audit_statistical_support.py`，33 个案例，包含远端反馈后的 10 个分析类型案例；同时更新旧的名称即通过测试及完整绑定 fixture。负例先在修复前失败，再验证修复。
 
 兼容性：保留旧名称参数，但不再把名称作为自动放行依据。调用者需要通过 `statistical_evidence` 提供类型化支持，并在 qualifiers 中提供 metric、dataset、split、evidence_ids、必要的 margin；仍需真正的人工统计解释流程。此检查只校验元数据关联，不验证实际分析文件字节或统计方法有效性。
 
@@ -69,7 +69,7 @@
 
 修复：使用标准库读取唯一的 `word/document.xml`，提取主文档段落和表格中的文本；不解压路径、不读取外部关系链接。XML 上限 8 MiB，拒绝重复主文档、DTD/entities、无效 XML 和不可读取文档；不可安全提取时空 excerpt 并标记人工审查。源 SHA 仍是原始 DOCX 字节的 SHA，截断仍明确可审计。
 
-回归：`tests/test_audit_docx_references.py`，5 个案例，覆盖正文/表格、坏容器、坏 XML、实体声明及字节预算与不可信提示词边界；相关 reference 测试 9 passed。
+回归：`tests/test_audit_docx_references.py`，8 个案例，覆盖正文/表格、坏容器、坏 XML、实体声明、字节预算与不可信提示词边界，以及远端反馈后的 tab/br/cr 分隔；初次相关 reference 测试 9 passed。
 
 限制：不是完整 Word 渲染器；不保证读取页眉、脚注等组件。当前仅接受 UTF-8 XML，其他编码转人工审查。XML 解压有界，但整个输入 ZIP 仍按既有加载方式读入内存。
 
@@ -97,7 +97,7 @@ git diff --check
 
 | 门禁 | 本轮结果 |
 | --- | --- |
-| 全量 pytest | 865 passed，5 skipped，0 failed，0 collection errors；37.71 秒 |
+| 全量 pytest | 881 passed，5 skipped，0 failed，0 collection errors；41.99 秒 |
 | 跳过归因 | Docker 1、OpenSSH 2、Slurm 1、Kubernetes 1；真实集成 gate 未启用 |
 | 警告 | 5 个 SWIG/PyMuPDF 绑定弃用警告，未隐藏 |
 | Ruff | All checks passed |
@@ -107,7 +107,7 @@ git diff --check
 | verify_wheel | 隔离安装并验证成功，退出码 0 |
 | diff whitespace | 通过 |
 
-初次基线运行未激活 venv PATH：831 passed / 5 skipped / 2 failed / 0 collection errors；两项失败均因子进程找不到 `python`。使用 venv PATH 后完整执行通过，没有修改计算代码或删减断言来掩盖环境失败。基线共有 838 个案例，本轮新增 32 个案例，最终共 870 个。
+初次基线运行未激活 venv PATH：831 passed / 5 skipped / 2 failed / 0 collection errors；两项失败均因子进程找不到 `python`。使用 venv PATH 后完整执行通过，没有修改计算代码或删减断言来掩盖环境失败。基线共有 838 个案例，首次新增 32 个；随后远端 follow-up 新增 16 个，总计新增 48 个、共 886 个。
 
 ## 审查范围与未验证事项
 
@@ -116,6 +116,24 @@ git diff --check
 未在本轮实际验证：新修改的 Windows/Linux CI、真实 Docker/SSH/Slurm/Kubernetes 后端、完整浏览器攻击路径、依赖漏洞数据库、任意 TeX 的操作系统级隔离、并发替换及断电恢复。不得把这些未验证事项称为通过。
 
 ## GitHub 审查状态与下一步
+
+### PR #5 首轮结果与 follow-up
+
+首次推送 `4e3855c428b30c60639707a0bc82da89a7b5532d` 并创建 [PR #5](https://github.com/QJHWC/PaperForge/pull/5)，立即确认该 SHA 的自动代码和安全审查均运行。代码审查发现两项 P2：
+
+1. DOCX 控制节点丢弃导致相邻 token 拼接。修复保留 `w:tab` 为 tab、`w:br`/`w:cr` 为 newline。
+2. 非等效性统计 claim 未验证分析类型兼容性。修复约束 superiority、stability/robustness、equivalence/TOST、noninferiority 家族；类型与文本冲突不能绑定，不自动批准任何统计解释。非劣效文字应使用适当非等效 claim 类型，不能谎称等效性。
+
+新增 13 个分析类型及 DOCX 控制节点案例：第一批修复前 8 failed / 32 passed；独立复核补充的等价类型/非劣效冲突修复前 1 failed / 9 passed。全部修复后相关组及 finalization 为 50 passed，独立 Python 复核通过。
+
+首轮 Windows Python 3.11 push job `115307973957` 为 848 passed / 18 skipped / 4 failed。失败涉及两个 LF 候选与隐式 CRLF fixture 的写作测试、保护 hash 测试的归一化读取，以及发布引擎的 CRLF 假副作用检测。没有把失败当作通过：
+
+- termination fixture 显式按 LF 字节初始化；保护 hash 测试按实际字节计算和编辑，保留原本 Windows CRLF 场景。
+- `paperforge/publication/engine.py` 的源读取、invariant 输入、repair context 与副作用比较统一使用原始字节解码，与保护事务一致。
+- 独立复核进一步发现发布引擎的 proposal `write_text` 仍会在 Windows 转换换行。修复为精确 UTF-8 字节写入，保留全部事务、invariant、副作用和回滚校验。
+- 原三轮发布测试扩展为 LF/CRLF 与普通/模拟 Windows 文本模式四组，并包含真实保护区及内容字节一致性断言。在 macOS 同样可复现修复前 CRLF 失败；模拟 Windows 写入修复前 2 failed / 2 passed，修复后相关保护、发布及 termination 测试 39 passed。独立最终复核的相关三文件测试为 36 passed。
+
+本段首轮 CI 和审查结果不为修复后的新 head 背书。新 head 必须重新通过跨平台 CI、自动代码审查和自动安全审查；最终远端状态在 PR 可核验，不用不断修改此快照去生成新的未审查提交。
 
 历史 PR #3 最终 head 为 `a34562afa2e318517a8439328fb13a9681683f05`，已经合并；最后可见的实际代码/安全审查针对旧 SHA `0af125a`，最终 head 的审查尝试因额度限制跳过。见[额度限制记录](https://github.com/QJHWC/PaperForge/pull/3#issuecomment-6100000612)及[后续记录](https://github.com/QJHWC/PaperForge/pull/3#issuecomment-6100292621)。因此历史合并不能当作最新 main 或本轮修改已通过远端安全审查的证据。
 
