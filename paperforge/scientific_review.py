@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -16,12 +17,14 @@ CLAIM_TYPES = (
     "causal_attribution", "protocol_statement", "limitation",
 )
 
-CHECKER_VERSION = "paperforge.science-checkers/v3"
+CHECKER_VERSION = "paperforge.science-checkers/v4"
 RULE_PACK_SCHEMA = "paperforge.science-review-rules/v1"
 REVIEW_BUNDLE_SCHEMA = "paperforge.scientific-review-bundle/v1"
 _STATISTICAL_TYPES = {"statistical_superiority", "statistical_equivalence", "stability"}
-_STATISTICAL_TRIGGERS = ("significant", "equivalent", "non-inferior", "noninferior",
-                         "robust", "stable", "statistically indistinguishable")
+_EQUIVALENCE_TRIGGERS = ("equivalen", "statistically indistinguishable")
+_STABILITY_TRIGGERS = ("robust", "stable", "stabil")
+_STATISTICAL_TRIGGERS = ("significan", *_EQUIVALENCE_TRIGGERS, *_STABILITY_TRIGGERS)
+_NONINFERIORITY_PATTERN = re.compile(r"\bnon[\s-]*inferior")
 
 
 class ScientificReviewError(RuntimeError):
@@ -260,9 +263,18 @@ def check_calibration_overlap(claim: ScientificClaim, facts: Mapping[str, Mappin
                    facts_used=tuple(claim.fact_ids))
 
 
+def _statistical_text(claim: ScientificClaim) -> str:
+    # Classification only: preserve original claim/source bytes and displayed characters.
+    text = unicodedata.normalize("NFKC", claim.text).casefold()
+    text = "".join(char for char in text if unicodedata.category(char) != "Cf")
+    return text.translate({ord(char): "-" for char in "\u2010\u2011\u2012\u2013\u2014\u2212"})
+
+
 def _is_statistical_claim(claim: ScientificClaim) -> bool:
-    return claim.claim_type in _STATISTICAL_TYPES or any(
-        trigger in claim.text.lower() for trigger in _STATISTICAL_TRIGGERS)
+    text = _statistical_text(claim)
+    return (claim.claim_type in _STATISTICAL_TYPES
+            or bool(_NONINFERIORITY_PATTERN.search(text))
+            or any(trigger in text for trigger in _STATISTICAL_TRIGGERS))
 
 
 def check_statistical_wording(claim: ScientificClaim, statistical_artifacts: Sequence[str] | None = None) -> ScientificCheckResult:
@@ -415,10 +427,10 @@ def check_statistical_binding(
     statistical_evidence: Sequence[StatisticalEvidence | Mapping[str, Any]] | None,
 ) -> ScientificCheckResult:
     """Strict binding: artifact must match this claim's metric/groups/data/margin."""
-    lowered = claim.text.lower()
-    needs_equivalence = ("equivalent" in lowered or "statistically indistinguishable" in lowered
+    lowered = _statistical_text(claim)
+    needs_equivalence = (any(trigger in lowered for trigger in _EQUIVALENCE_TRIGGERS)
                          or claim.claim_type == "statistical_equivalence")
-    needs_noninferiority = "non-inferior" in lowered or "noninferior" in lowered
+    needs_noninferiority = bool(_NONINFERIORITY_PATTERN.search(lowered))
     if not _is_statistical_claim(claim):
         return _result("statistical_binding", claim.claim_id, "passed", "no statistical claim",
                        facts_used=tuple(claim.fact_ids))
@@ -426,7 +438,7 @@ def check_statistical_binding(
         allowed_analysis_types = {"noninferiority", "non-inferiority"}
     elif needs_equivalence:
         allowed_analysis_types = {"equivalence", "tost"}
-    elif claim.claim_type == "stability" or "robust" in lowered or "stable" in lowered:
+    elif claim.claim_type == "stability" or any(trigger in lowered for trigger in _STABILITY_TRIGGERS):
         allowed_analysis_types = {"stability", "robustness"}
     else:
         allowed_analysis_types = {"superiority", "significance"}

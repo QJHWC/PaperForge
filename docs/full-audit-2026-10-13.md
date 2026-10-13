@@ -7,8 +7,8 @@
 - 仓库：`/Users/qjhwc/Desktop/PaperForge/PaperForge-github`。
 - 审查开始时，本地 HEAD 与通过 GitHub API 查询的 main 一致：`fb4195914c4988678eccc0b8be60bc7a458c78d7`。
 - 本地工作分支：`audit/full-review-2026-10-13`。上述 SHA 是修复前基线，不是修复后提交。下述本地门禁记录是提交前快照；远端结果以 PR 的精确 head SHA 为准。
-- 修复 4 类可复现问题及远端 follow-up，优化 1 处图表配对热点，新增 48 个回归测试案例。
-- 最终本地全量测试：886 个案例，**881 passed / 5 skipped / 0 failed / 0 collection errors**，5 个 SWIG 弃用警告。首次提交前的结果为 865 passed / 5 skipped。
+- 修复 4 类可复现问题及远端 follow-up，优化 1 处图表配对热点，新增 68 个回归测试案例。
+- 最终本地全量测试：906 个案例，**901 passed / 5 skipped / 0 failed / 0 collection errors**，5 个 SWIG 弃用警告。首次提交前的结果为 865 passed / 5 skipped。
 - Ruff、mypy、依赖一致性、sdist/wheel 构建、隔离安装后的 wheel 验证通过。
 - 独立 Python 代码复核覆盖本轮生产修改，未发现剩余 HIGH/CRITICAL；这不等于远端 Codex Security 对当前修改已出具报告。
 
@@ -26,14 +26,14 @@
 
 修复：
 
-- checker 版本升级至 `paperforge.science-checkers/v3`（首次修复为 v2，分析类型绑定 follow-up 再升级为 v3）。
+- checker 版本升级至 `paperforge.science-checkers/v4`（首次修复为 v2，分析类型绑定为 v3，名词/排版字符分类 follow-up 为 v4）。
 - 使用 claim qualifiers 中明确的 `evidence_ids`，要求非空且完整匹配；完整 subjects 和 metric/dataset/split 同步匹配。
 - 要求非空分析类型、方法、版本和 result，以及合法格式的源文件 SHA-256；声明 observation digest 时必须一致。
 - 等效性/非劣效性要求匹配分析类型和有限、正值、相等的 margin。
 - 类型分类和统计措辞共同决定必须运行的检查，防止把统计 claim 标成描述性 claim 绕过 gate。
 - **元数据绑定通过不等于科学解释通过。所有统计解释仍为 `needs_human`，不得伪造人工确认。**
 
-回归：`tests/test_audit_statistical_support.py`，33 个案例，包含远端反馈后的 10 个分析类型案例；同时更新旧的名称即通过测试及完整绑定 fixture。负例先在修复前失败，再验证修复。
+回归：`tests/test_audit_statistical_support.py`，51 个案例，包含分析类型、名词措辞和排版字符案例；同时更新旧的名称即通过测试及完整绑定 fixture。负例先在修复前失败，再验证修复。
 
 兼容性：保留旧名称参数，但不再把名称作为自动放行依据。调用者需要通过 `statistical_evidence` 提供类型化支持，并在 qualifiers 中提供 metric、dataset、split、evidence_ids、必要的 margin；仍需真正的人工统计解释流程。此检查只校验元数据关联，不验证实际分析文件字节或统计方法有效性。
 
@@ -69,7 +69,7 @@
 
 修复：使用标准库读取唯一的 `word/document.xml`，提取主文档段落和表格中的文本；不解压路径、不读取外部关系链接。XML 上限 8 MiB，拒绝重复主文档、DTD/entities、无效 XML 和不可读取文档；不可安全提取时空 excerpt 并标记人工审查。源 SHA 仍是原始 DOCX 字节的 SHA，截断仍明确可审计。
 
-回归：`tests/test_audit_docx_references.py`，8 个案例，覆盖正文/表格、坏容器、坏 XML、实体声明、字节预算与不可信提示词边界，以及远端反馈后的 tab/br/cr 分隔；初次相关 reference 测试 9 passed。
+回归：`tests/test_audit_docx_references.py`，10 个案例，覆盖正文/表格、坏容器、坏 XML、实体声明、字节预算与不可信提示词边界，以及远端反馈后的 tab/br/cr 分隔与非断行/软连字符；初次相关 reference 测试 9 passed。
 
 限制：不是完整 Word 渲染器；不保证读取页眉、脚注等组件。当前仅接受 UTF-8 XML，其他编码转人工审查。XML 解压有界，但整个输入 ZIP 仍按既有加载方式读入内存。
 
@@ -97,7 +97,7 @@ git diff --check
 
 | 门禁 | 本轮结果 |
 | --- | --- |
-| 全量 pytest | 881 passed，5 skipped，0 failed，0 collection errors；41.99 秒 |
+| 全量 pytest | 901 passed，5 skipped，0 failed，0 collection errors |
 | 跳过归因 | Docker 1、OpenSSH 2、Slurm 1、Kubernetes 1；真实集成 gate 未启用 |
 | 警告 | 5 个 SWIG/PyMuPDF 绑定弃用警告，未隐藏 |
 | Ruff | All checks passed |
@@ -107,7 +107,7 @@ git diff --check
 | verify_wheel | 隔离安装并验证成功，退出码 0 |
 | diff whitespace | 通过 |
 
-初次基线运行未激活 venv PATH：831 passed / 5 skipped / 2 failed / 0 collection errors；两项失败均因子进程找不到 `python`。使用 venv PATH 后完整执行通过，没有修改计算代码或删减断言来掩盖环境失败。基线共有 838 个案例，首次新增 32 个；随后远端 follow-up 新增 16 个，总计新增 48 个、共 886 个。
+初次基线运行未激活 venv PATH：831 passed / 5 skipped / 2 failed / 0 collection errors；两项失败均因子进程找不到 `python`。使用 venv PATH 后完整执行通过，没有修改计算代码或删减断言来掩盖环境失败。基线共有 838 个案例，首次新增 32 个；随后远端 follow-up 新增 36 个，总计新增 68 个、共 906 个。
 
 ## 审查范围与未验证事项
 
@@ -134,6 +134,17 @@ git diff --check
 - 原三轮发布测试扩展为 LF/CRLF 与普通/模拟 Windows 文本模式四组，并包含真实保护区及内容字节一致性断言。在 macOS 同样可复现修复前 CRLF 失败；模拟 Windows 写入修复前 2 failed / 2 passed，修复后相关保护、发布及 termination 测试 39 passed。独立最终复核的相关三文件测试为 36 passed。
 
 本段首轮 CI 和审查结果不为修复后的新 head 背书。新 head 必须重新通过跨平台 CI、自动代码审查和自动安全审查；最终远端状态在 PR 可核验，不用不断修改此快照去生成新的未审查提交。
+
+### 第二轮代码审查：名词形式及排版字符
+
+对 `366a1eea7cc3ce766c2515b4b4810eec263e3195` 重新触发并查看双审，代码审查发现 P1 名词分类绕过（equivalence/significance/stability）及 P2 DOCX 特殊连字符丢失。未合并；复现并修复如下：
+
+- 统计检测和绑定意图共用 equivalen/significan/stabil 等词干，覆盖名词、形容词及常见派生形式。
+- DOCX 保留 `w:noBreakHyphen` 为 U+2011、`w:softHyphen` 为 U+00AD，不把相邻标识符拼接。
+- 独立复核发现这些字符可能再次绕过 ASCII 非劣效措辞判断；新增仅用于分类的共享规范化（NFKC/casefold、格式字符去除、Unicode 连字符映射及非劣效空白变体），wording、binding、coverage 使用一致规则。原始 claim、excerpt、源文件及其哈希不被规范化或改写。
+- 新增 20 个案例：第一批 11 个修复前全失败；排版形式 9 个修复前全失败；正确类型绑定和错误家族拒绝亦覆盖。修复后 audit/core/finalization 共 92 passed，独立复核通过。
+
+这是保守的英语措辞启发式与显式 claim 类型检查，不是穷尽任意语言、同义表达或自然语言推断的证明；未假装人工审核已完成。第二轮旧 head 的双审完成状态仍不能作为后续提交的放行依据。
 
 历史 PR #3 最终 head 为 `a34562afa2e318517a8439328fb13a9681683f05`，已经合并；最后可见的实际代码/安全审查针对旧 SHA `0af125a`，最终 head 的审查尝试因额度限制跳过。见[额度限制记录](https://github.com/QJHWC/PaperForge/pull/3#issuecomment-6100000612)及[后续记录](https://github.com/QJHWC/PaperForge/pull/3#issuecomment-6100292621)。因此历史合并不能当作最新 main 或本轮修改已通过远端安全审查的证据。
 
