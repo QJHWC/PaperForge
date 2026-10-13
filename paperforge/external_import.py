@@ -1093,7 +1093,7 @@ def reconcile_imports(workspace: str | Path, memory: Any, *, repair: bool = Fals
                 if source:
                     source_path = reject_symlink_components(
                         sources_dir.parent / str(source.get("path") or ""), anchor=sources_dir.parent)
-                    if hashlib.sha256(source_path.read_bytes()).hexdigest() != source.get("sha256"):
+                    if hashlib.sha256(source_path.read_bytes()).hexdigest() != str(source.get("sha256") or "").lower():
                         orphan_materializations.append(key)
                         break
                 if (meta.get("materialization_key") != key or meta.get("import_id") != row["import_id"]

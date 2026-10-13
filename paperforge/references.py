@@ -187,6 +187,9 @@ def _extract_docx(data: bytes, *, budget_bytes: int) -> tuple[str, bool, int, bo
             raise ValueError("XML entities are not accepted")
         tree = ET.fromstring(decoded)
         namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        # Font-mapped symbol codes are not Unicode; never guess or silently omit them.
+        if any(True for _ in tree.iter(namespace + "sym")):
+            raise ValueError("font-mapped symbols require manual review")
         characters = {namespace + "tab": "\t", namespace + "br": "\n", namespace + "cr": "\n",
                       namespace + "noBreakHyphen": "\u2011", namespace + "softHyphen": "\u00ad"}
         paragraphs = ["".join(node.text or "" if node.tag == namespace + "t"

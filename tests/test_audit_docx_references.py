@@ -69,3 +69,18 @@ def test_docx_preserves_inline_hyphen_characters(tmp_path, control, character):
     item = ReferenceLoader(tmp_path).load(["ref.docx"]).excerpts[0]
     assert item.excerpt == f"alpha{character}beta"
     assert item.needs_human_review is False
+
+
+@pytest.mark.parametrize("font,code", [("Symbol", "F061"), ("Wingdings", "F0FC"), ("Unknown", "0061")])
+def test_docx_font_mapped_symbols_require_manual_review(tmp_path, font, code):
+    raw = archive(
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:body><w:p><w:r><w:t>alpha</w:t>'
+        f'<w:sym w:font="{font}" w:char="{code}"/><w:t>beta</w:t>'
+        '</w:r></w:p></w:body></w:document>')
+    (tmp_path / "ref.docx").write_bytes(raw)
+    item = ReferenceLoader(tmp_path).load(["ref.docx"]).excerpts[0]
+    assert item.needs_human_review is True
+    assert item.excerpt == ""
+    assert item.sha256 == hashlib.sha256(raw).hexdigest()
+    assert item.bytes_read == 0

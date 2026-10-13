@@ -7,8 +7,8 @@
 - 仓库：`/Users/qjhwc/Desktop/PaperForge/PaperForge-github`。
 - 审查开始时，本地 HEAD 与通过 GitHub API 查询的 main 一致：`fb4195914c4988678eccc0b8be60bc7a458c78d7`。
 - 本地工作分支：`audit/full-review-2026-10-13`。上述 SHA 是修复前基线，不是修复后提交。下述本地门禁记录是提交前快照；远端结果以 PR 的精确 head SHA 为准。
-- 修复 4 类可复现问题及远端 follow-up，优化 1 处图表配对热点，新增 107 个回归测试案例。
-- 最终本地全量测试：945 个案例，**940 passed / 5 skipped / 0 failed / 0 collection errors**，5 个 SWIG 弃用警告。首次提交前的结果为 865 passed / 5 skipped。
+- 修复 4 类可复现问题及远端 follow-up，优化 1 处图表配对热点，新增 113 个回归测试案例。
+- 最终本地全量测试：951 个案例，**946 passed / 5 skipped / 0 failed / 0 collection errors**，5 个 SWIG 弃用警告。首次提交前的结果为 865 passed / 5 skipped。
 - Ruff、mypy、依赖一致性、sdist/wheel 构建、隔离安装后的 wheel 验证通过。
 - 独立 Python 代码复核覆盖本轮生产修改，未发现剩余 HIGH/CRITICAL；这不等于远端 Codex Security 对当前修改已出具报告。
 
@@ -57,7 +57,7 @@
 
 修复：批准、有效性检查和 reconciliation 均拒绝源路径中的软链接组件；reconciliation 重新检查源文件实际 SHA，异常进入人工干预状态，拒绝自动修复，不改变 Evidence 或数据库状态。
 
-回归：`tests/test_audit_import_symlinks.py`，1 个案例；验证工作区外文件、源软链接和数据库均不被修改。相关导入测试 23 passed。
+回归：`tests/test_audit_import_symlinks.py`，4 个案例；验证工作区外文件、源软链接和数据库均不被修改，并覆盖 lowercase/uppercase/mixed-case 源摘要的完整批准/物化/核对流程及字节篡改拒绝。初次相关导入测试 23 passed。
 
 严重性边界：现有 ledger 的后续校验已拒绝此类路径，未证明它能绕过最终发布；因此没有把该问题描述为高危发布绕过。该修复也不声称消除了并发路径替换的 TOCTOU 风险。
 
@@ -69,7 +69,7 @@
 
 修复：使用标准库读取唯一的 `word/document.xml`，提取主文档段落和表格中的文本；不解压路径、不读取外部关系链接。XML 上限 8 MiB，拒绝重复主文档、DTD/entities、无效 XML 和不可读取文档；不可安全提取时空 excerpt 并标记人工审查。源 SHA 仍是原始 DOCX 字节的 SHA，截断仍明确可审计。
 
-回归：`tests/test_audit_docx_references.py`，10 个案例，覆盖正文/表格、坏容器、坏 XML、实体声明、字节预算与不可信提示词边界，以及远端反馈后的 tab/br/cr 分隔与非断行/软连字符；初次相关 reference 测试 9 passed。
+回归：`tests/test_audit_docx_references.py`，13 个案例，覆盖正文/表格、坏容器、坏 XML、实体声明、字节预算与不可信提示词边界，以及远端反馈后的 tab/br/cr 分隔、非断行/软连字符与字体映射符号转人工审查；初次相关 reference 测试 9 passed。
 
 限制：不是完整 Word 渲染器；不保证读取页眉、脚注等组件。当前仅接受 UTF-8 XML，其他编码转人工审查。XML 解压有界，但整个输入 ZIP 仍按既有加载方式读入内存。
 
@@ -97,7 +97,7 @@ git diff --check
 
 | 门禁 | 本轮结果 |
 | --- | --- |
-| 全量 pytest | 940 passed，5 skipped，0 failed，0 collection errors |
+| 全量 pytest | 946 passed，5 skipped，0 failed，0 collection errors |
 | 跳过归因 | Docker 1、OpenSSH 2、Slurm 1、Kubernetes 1；真实集成 gate 未启用 |
 | 警告 | 5 个 SWIG/PyMuPDF 绑定弃用警告，未隐藏 |
 | Ruff | All checks passed |
@@ -107,7 +107,7 @@ git diff --check
 | verify_wheel | 隔离安装并验证成功，退出码 0 |
 | diff whitespace | 通过 |
 
-初次基线运行未激活 venv PATH：831 passed / 5 skipped / 2 failed / 0 collection errors；两项失败均因子进程找不到 `python`。使用 venv PATH 后完整执行通过，没有修改计算代码或删减断言来掩盖环境失败。基线共有 838 个案例，首次新增 32 个；随后远端 follow-up 新增 75 个，总计新增 107 个、共 945 个。
+初次基线运行未激活 venv PATH：831 passed / 5 skipped / 2 failed / 0 collection errors；两项失败均因子进程找不到 `python`。使用 venv PATH 后完整执行通过，没有修改计算代码或删减断言来掩盖环境失败。基线共有 838 个案例，首次新增 32 个；随后远端 follow-up 新增 81 个，总计新增 113 个、共 951 个。
 
 ## 审查范围与未验证事项
 
@@ -159,6 +159,12 @@ git diff --check
 checker v6 增加共享 p-value（ASCII/Unicode/受限 LaTeX 比较符）及百分比 CI 模式，以及明确的 confidence/credible interval、null hypothesis 等统计措辞。区间绑定使用相应 confidence_interval/credible_interval 分析家族，不允许用 superiority 元数据替代。
 
 独立复核继续指出 `$p$ < 0.05` 和 `p_{adj}` 的常见数学格式；在仅分类视图中去掉数学定界符、展开受限单层字体宏，支持有界下标及近似比较符，不修改原文、不执行 TeX。新增 33 个案例：第一批 22 failed / 1 passed（普通 CI workflow 不误判）；随后数学格式 10 failed / 22 passed；修复后 audit/core/finalization 共 131 passed。新 head 仍须重新通过 CI 和双审，不能复用 8217ee8 的安全结论。
+
+### 第五轮代码审查：摘要大小写与 DOCX 字体映射符号
+
+`87c5e9898eb239ad032bf0ef31a4fbcdc801c1f5` 的代码审查发现两项 P2，因此仍未合并：reconciliation 与 validation/approval 对源 SHA 的大小写处理不一致；`w:sym` 的显示字符依赖字体映射，被静默丢弃后会把相邻文字拼接。
+
+修复仅把源字节摘要对比与现有 validation/approval 一样归一为 lowercase，不改变 manifest/approval 的字节绑定；DOCX 遇到字体映射符号则整个摘录 fail closed 并要求人工审查，不猜测 Unicode 字符，保留原始 ZIP 摘要。新增 6 个案例；修复前 5 failed / 12 passed（小写摘要正例通过），修复后相关 import/reference 共 43 passed。后续提交仍须重新通过完整 CI 和双审。
 
 历史 PR #3 最终 head 为 `a34562afa2e318517a8439328fb13a9681683f05`，已经合并；最后可见的实际代码/安全审查针对旧 SHA `0af125a`，最终 head 的审查尝试因额度限制跳过。见[额度限制记录](https://github.com/QJHWC/PaperForge/pull/3#issuecomment-6100000612)及[后续记录](https://github.com/QJHWC/PaperForge/pull/3#issuecomment-6100292621)。因此历史合并不能当作最新 main 或本轮修改已通过远端安全审查的证据。
 
