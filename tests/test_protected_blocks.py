@@ -28,12 +28,11 @@ def _document(body: str = "No experimental results are available.") -> str:
 def test_protected_transaction_allows_edits_outside_block(tmp_path: Path) -> None:
     tex = tmp_path / "main.tex"
     tex.write_text(_document(), encoding="utf-8")
-    before_hash = protected_blocks_sha256(tex.read_text(encoding="utf-8"))
+    before_hash = protected_blocks_sha256(tex.read_bytes().decode("utf-8"))
     transaction = ProtectedEditTransaction(tex, require_markers=True)
 
-    tex.write_text(
-        tex.read_text(encoding="utf-8").replace("Original conclusion.", "Revised conclusion."),
-        encoding="utf-8",
+    tex.write_bytes(
+        tex.read_bytes().replace(b"Original conclusion.", b"Revised conclusion.")
     )
 
     assert transaction.verify() == before_hash

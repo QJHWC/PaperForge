@@ -445,16 +445,18 @@ def generate_figure(
     # v1: each ledger row is one metric observation; pair x and y by run/model/seed group.
     x_rows = [r for r in points if str(r.get("metric_name")) == spec.x_metric and r.get("value_str") is not None]
     y_rows = [r for r in points if str(r.get("metric_name")) == spec.y_metric and r.get("value_str") is not None]
+    def pair_key(row: Mapping[str, Any]) -> str:
+        return json.dumps([dict(row.get("run_identity") or {}), row.get("measurement_kind")], sort_keys=True)
+
+    x_index: dict[str, list[dict[str, Any]]] = {}
+    for row in x_rows:
+        x_index.setdefault(pair_key(row), []).append(row)
     series: dict[str, list[dict[str, str]]] = {}
     for y in sorted(y_rows, key=lambda r: str(r.get("row_id"))):
         identity = dict(y.get("run_identity") or {})
         group = str(identity.get(spec.series_by) or y.get("measurement_kind") or "default")
         # Never join observations across unlisted run dimensions or layers.
-        matches = [
-            x for x in x_rows
-            if dict(x.get("run_identity") or {}) == identity
-            and x.get("measurement_kind") == y.get("measurement_kind")
-        ]
+        matches = x_index.get(pair_key(y), [])
         if not matches:
             continue
         if len(matches) != 1:

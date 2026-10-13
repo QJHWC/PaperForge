@@ -92,10 +92,10 @@ def test_robustness_not_auto() -> None:  # 12
     assert any(r.status == "needs_human" for r in results)
 
 
-def test_statistical_artifact_satisfies() -> None:  # 13
+def test_statistical_artifact_name_is_not_support() -> None:  # 13
     results = review_claim(_claim("Significantly better.", claim_type="statistical_superiority", facts=("f1",)),
                            facts=_facts(), statistical_artifacts=["stat-test-1"])
-    assert any(r.check_type == "statistical_wording" and r.status == "passed" for r in results)
+    assert any(r.check_type == "statistical_wording" and r.status == "needs_human" for r in results)
 
 
 def test_generalization_scope() -> None:  # 14,15
