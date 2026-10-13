@@ -136,3 +136,13 @@ def test_statistical_typography_cannot_bypass_classification(text):
     if text.startswith("A is"):
         assert check_statistical_binding(item, [replace(support(), analysis_type="noninferiority")]).status == "passed"
         assert check_statistical_binding(item, [replace(support(), analysis_type="superiority")]).status != "passed"
+
+
+@pytest.mark.parametrize("kind", ["descriptive_metric", "comparison"])
+@pytest.mark.parametrize("text", ["A is statistically superior to B.",
+    "The analysis shows statistical superiority.", "The superiority is established."])
+def test_explicit_statistical_superiority_requires_human_interpretation(text, kind):
+    item = replace(claim(), text=text, claim_type=kind)
+    results = review_claim(item, facts={"f": {}})
+    assert next(r for r in results if r.check_type == "statistical_wording").status == "needs_human"
+    assert coverage_gate([item], results)["c"]["verdict"] != "reviewed"

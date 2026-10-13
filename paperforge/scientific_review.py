@@ -17,13 +17,13 @@ CLAIM_TYPES = (
     "causal_attribution", "protocol_statement", "limitation",
 )
 
-CHECKER_VERSION = "paperforge.science-checkers/v4"
+CHECKER_VERSION = "paperforge.science-checkers/v5"
 RULE_PACK_SCHEMA = "paperforge.science-review-rules/v1"
 REVIEW_BUNDLE_SCHEMA = "paperforge.scientific-review-bundle/v1"
 _STATISTICAL_TYPES = {"statistical_superiority", "statistical_equivalence", "stability"}
 _EQUIVALENCE_TRIGGERS = ("equivalen", "statistically indistinguishable")
 _STABILITY_TRIGGERS = ("robust", "stable", "stabil")
-_STATISTICAL_TRIGGERS = ("significan", *_EQUIVALENCE_TRIGGERS, *_STABILITY_TRIGGERS)
+_STATISTICAL_TRIGGERS = ("statistic", "superior", "significan", *_EQUIVALENCE_TRIGGERS, *_STABILITY_TRIGGERS)
 _NONINFERIORITY_PATTERN = re.compile(r"\bnon[\s-]*inferior")
 
 
