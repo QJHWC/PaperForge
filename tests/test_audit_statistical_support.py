@@ -173,3 +173,20 @@ def test_explicit_statistical_results_require_human_interpretation(text, kind):
 def test_ordinary_ci_workflow_text_is_not_statistical_claim():
     item = replace(claim(), text="The CI workflow completed.", claim_type="descriptive_metric")
     assert coverage_gate([item], review_claim(item, facts={"f": {}}))["c"]["verdict"] == "reviewed"
+
+
+@pytest.mark.parametrize("kind", ["descriptive_metric", "comparison"])
+@pytest.mark.parametrize("text", [
+    "A outperformed B (t(18)=2.4).", "A outperformed B, F(2,20)=5.1.",
+    "t = -2.4.", "F = 5.1.", "z = 2.4.", "U = 12.", "W = 20.", "H(2) = 6.4.",
+    "chi-square(2) = 6.4.", "chi2(2)=6.4.", "\u03c7\u00b2(2) = 6.4.",
+    r"$\chi^{2}(2) = 6.4$.", r"$t(18) \geq 2.4$.",
+])
+def test_test_statistic_notation_requires_human_interpretation(text, kind):
+    item = replace(claim(), text=text, claim_type=kind)
+    results = review_claim(item, facts={"f": {}},
+                           statistical_evidence=[replace(support(), analysis_type="significance")])
+    assert next(r for r in results if r.check_type == "statistical_wording").status == "needs_human"
+    assert next(r for r in results if r.check_type == "statistical_binding").status == "passed"
+    assert coverage_gate([item], results)["c"]["verdict"] == "needs_human"
+    assert item.text == text

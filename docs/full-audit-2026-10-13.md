@@ -7,8 +7,8 @@
 - 仓库：`/Users/qjhwc/Desktop/PaperForge/PaperForge-github`。
 - 审查开始时，本地 HEAD 与通过 GitHub API 查询的 main 一致：`fb4195914c4988678eccc0b8be60bc7a458c78d7`。
 - 本地工作分支：`audit/full-review-2026-10-13`。上述 SHA 是修复前基线，不是修复后提交。下述本地门禁记录是提交前快照；远端结果以 PR 的精确 head SHA 为准。
-- 修复 4 类可复现问题及远端 follow-up，优化 1 处图表配对热点，新增 113 个回归测试案例。
-- 最终本地全量测试：951 个案例，**946 passed / 5 skipped / 0 failed / 0 collection errors**，5 个 SWIG 弃用警告。首次提交前的结果为 865 passed / 5 skipped。
+- 修复 4 类可复现问题及远端 follow-up，优化 1 处图表配对热点，新增 139 个回归测试案例。
+- 最终本地全量测试：977 个案例，**972 passed / 5 skipped / 0 failed / 0 collection errors**，5 个 SWIG 弃用警告。首次提交前的结果为 865 passed / 5 skipped。
 - Ruff、mypy、依赖一致性、sdist/wheel 构建、隔离安装后的 wheel 验证通过。
 - 独立 Python 代码复核覆盖本轮生产修改，未发现剩余 HIGH/CRITICAL；这不等于远端 Codex Security 对当前修改已出具报告。
 
@@ -26,14 +26,14 @@
 
 修复：
 
-- checker 版本升级至 `paperforge.science-checkers/v6`（首次修复为 v2，分析类型绑定为 v3，名词/排版字符为 v4，显式 statistical/superiority 为 v5，p-value/区间及受限数学格式为 v6）。
+- checker 版本升级至 `paperforge.science-checkers/v7`（首次修复为 v2，分析类型绑定为 v3，名词/排版字符为 v4，显式 statistical/superiority 为 v5，p-value/区间及受限数学格式为 v6，常见检验统计量为 v7）。
 - 使用 claim qualifiers 中明确的 `evidence_ids`，要求非空且完整匹配；完整 subjects 和 metric/dataset/split 同步匹配。
 - 要求非空分析类型、方法、版本和 result，以及合法格式的源文件 SHA-256；声明 observation digest 时必须一致。
 - 等效性/非劣效性要求匹配分析类型和有限、正值、相等的 margin。
 - 类型分类和统计措辞共同决定必须运行的检查，防止把统计 claim 标成描述性 claim 绕过 gate。
 - **元数据绑定通过不等于科学解释通过。所有统计解释仍为 `needs_human`，不得伪造人工确认。**
 
-回归：`tests/test_audit_statistical_support.py`，90 个案例，包含分析类型、名词措辞、排版字符、显式统计优越性、p-value/区间及数学格式案例；同时更新旧的名称即通过测试及完整绑定 fixture。负例先在修复前失败，再验证修复。
+回归：`tests/test_audit_statistical_support.py`，116 个案例，包含分析类型、名词措辞、排版字符、显式统计优越性、p-value/区间及常见检验统计量的数学格式案例；同时更新旧的名称即通过测试及完整绑定 fixture。负例先在修复前失败，再验证修复。
 
 兼容性：保留旧名称参数，但不再把名称作为自动放行依据。调用者需要通过 `statistical_evidence` 提供类型化支持，并在 qualifiers 中提供 metric、dataset、split、evidence_ids、必要的 margin；仍需真正的人工统计解释流程。此检查只校验元数据关联，不验证实际分析文件字节或统计方法有效性。
 
@@ -97,7 +97,7 @@ git diff --check
 
 | 门禁 | 本轮结果 |
 | --- | --- |
-| 全量 pytest | 946 passed，5 skipped，0 failed，0 collection errors |
+| 全量 pytest | 972 passed，5 skipped，0 failed，0 collection errors |
 | 跳过归因 | Docker 1、OpenSSH 2、Slurm 1、Kubernetes 1；真实集成 gate 未启用 |
 | 警告 | 5 个 SWIG/PyMuPDF 绑定弃用警告，未隐藏 |
 | Ruff | All checks passed |
@@ -107,7 +107,7 @@ git diff --check
 | verify_wheel | 隔离安装并验证成功，退出码 0 |
 | diff whitespace | 通过 |
 
-初次基线运行未激活 venv PATH：831 passed / 5 skipped / 2 failed / 0 collection errors；两项失败均因子进程找不到 `python`。使用 venv PATH 后完整执行通过，没有修改计算代码或删减断言来掩盖环境失败。基线共有 838 个案例，首次新增 32 个；随后远端 follow-up 新增 81 个，总计新增 113 个、共 951 个。
+初次基线运行未激活 venv PATH：831 passed / 5 skipped / 2 failed / 0 collection errors；两项失败均因子进程找不到 `python`。使用 venv PATH 后完整执行通过，没有修改计算代码或删减断言来掩盖环境失败。基线共有 838 个案例，首次新增 32 个；随后远端 follow-up 新增 107 个，总计新增 139 个、共 977 个。
 
 ## 审查范围与未验证事项
 
@@ -165,6 +165,14 @@ checker v6 增加共享 p-value（ASCII/Unicode/受限 LaTeX 比较符）及百�
 `87c5e9898eb239ad032bf0ef31a4fbcdc801c1f5` 的代码审查发现两项 P2，因此仍未合并：reconciliation 与 validation/approval 对源 SHA 的大小写处理不一致；`w:sym` 的显示字符依赖字体映射，被静默丢弃后会把相邻文字拼接。
 
 修复仅把源字节摘要对比与现有 validation/approval 一样归一为 lowercase，不改变 manifest/approval 的字节绑定；DOCX 遇到字体映射符号则整个摘录 fail closed 并要求人工审查，不猜测 Unicode 字符，保留原始 ZIP 摘要。新增 6 个案例；修复前 5 failed / 12 passed（小写摘要正例通过），修复后相关 import/reference 共 43 passed。后续提交仍须重新通过完整 CI 和双审。
+
+### 第六轮代码审查：常见检验统计量
+
+`09c758ecbafd460636ea54098d68fafa8882967f` 的代码审查发现 P1：`t(18)=2.4` / `F(2,20)=5.1` 未进入统计分类。checker v7 的共享规则增加 t/F/z/U/W/H、chi-square/chi2/Unicode χ²/受限 LaTeX 记号及有界数字自由度、比较符；这些可能有歧义的短符号结果保守转人工审核，不声称能够理解所有科学公式。原始文本保持不变。
+
+新增 26 个案例，修复前 26 failed / 90 passed；修复后 audit/core/U4B 共 171 passed，独立只读复核 129 passed 并 approve。绑定通过仍不自动批准解释。
+
+同一旧 head 的 PR real-compute job `115366877821` 另有一次真实 Kubernetes lifecycle 失败：4 passed / 1 failed，终态等待期间返回 `UNKNOWN`，stderr 为空。完整日志保留在 `/tmp/paperforge-pr5-real-compute-failure.log`。尚未定位根因，不把它归因为环境失败或当作通过；没有删减集成断言或修改后端来掩盖，后续提交必须重新执行完整真实后端 gate 并成功，重复失败时进一步定位。
 
 历史 PR #3 最终 head 为 `a34562afa2e318517a8439328fb13a9681683f05`，已经合并；最后可见的实际代码/安全审查针对旧 SHA `0af125a`，最终 head 的审查尝试因额度限制跳过。见[额度限制记录](https://github.com/QJHWC/PaperForge/pull/3#issuecomment-6100000612)及[后续记录](https://github.com/QJHWC/PaperForge/pull/3#issuecomment-6100292621)。因此历史合并不能当作最新 main 或本轮修改已通过远端安全审查的证据。
 

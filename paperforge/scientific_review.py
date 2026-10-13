@@ -17,7 +17,7 @@ CLAIM_TYPES = (
     "causal_attribution", "protocol_statement", "limitation",
 )
 
-CHECKER_VERSION = "paperforge.science-checkers/v6"
+CHECKER_VERSION = "paperforge.science-checkers/v7"
 RULE_PACK_SCHEMA = "paperforge.science-review-rules/v1"
 REVIEW_BUNDLE_SCHEMA = "paperforge.scientific-review-bundle/v1"
 _STATISTICAL_TYPES = {"statistical_superiority", "statistical_equivalence", "stability"}
@@ -32,6 +32,11 @@ _P_VALUE_PATTERN = re.compile(
     r"\s*(?:[<=>~\u2264\u2265\u2248]+|\\(?:leq?|geq?|lt|gt|approx|sim|simeq))"
     r"\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)")
 _INTERVAL_PATTERN = re.compile(r"\b(?:\d+(?:\.\d+)?\s*(?:%|\\%)\s*ci\b|(?:confidence|credible)\s+interval\b)")
+_TEST_STATISTIC_PATTERN = re.compile(
+    r"\b(?:[tfzuwh]|chi[\s-]*squared?|(?:chi|\u03c7)\s*(?:2|\^\s*(?:2|\{2\})))"
+    r"\s*(?:\([\d.,+\-\s]{1,64}\))?"
+    r"\s*(?:[<=>~\u2264\u2265\u2248]+|\\(?:leq?|geq?|lt|gt|approx|sim|simeq))"
+    r"\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)")
 
 
 class ScientificReviewError(RuntimeError):
@@ -285,6 +290,7 @@ def _is_statistical_claim(claim: ScientificClaim) -> bool:
             or bool(_NONINFERIORITY_PATTERN.search(text))
             or bool(_P_VALUE_PATTERN.search(text))
             or bool(_INTERVAL_PATTERN.search(text))
+            or bool(_TEST_STATISTIC_PATTERN.search(text))
             or any(trigger in text for trigger in _STATISTICAL_TRIGGERS))
 
 
