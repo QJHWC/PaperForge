@@ -6,9 +6,6 @@
   </a>
   <img src="https://img.shields.io/badge/version-v3.0.0-2563eb" alt="Version v3.0.0" />
   <img src="https://img.shields.io/badge/Python-3.10--3.12-3776ab?logo=python&logoColor=white" alt="Python 3.10-3.12" />
-  <a href="https://linux.do" target="_blank">
-    <img src="https://img.shields.io/badge/LINUX-DO-FFB003?style=for-the-badge&logo=linux&logoColor=white" alt="LINUX DO" />
-  </a>
 </p>
 
 PaperForge v3 是一个以证据为中心的科研工作系统，用于研究规划、受控实验、
@@ -17,6 +14,30 @@ PaperForge v3 是一个以证据为中心的科研工作系统，用于研究规
 Artifact Registry 和 Release Verifier。
 
 > ⚠️ 免责声明：本项目仅供学习与研究使用，不得用于任何商业用途。使用本项目所产生的一切后果由使用者自行承担。
+
+## 赞助商（广告）
+
+<p align="center">
+  <a href="https://www.infistar.cc/register?aff=A59GBTG8&amp;ref_source=link">
+    <img src="docs/images/infistar-paperforge.jpg" alt="PaperForge × Infistar.cc 无限星河：低至官方 0.1 折，PaperForge 用户注册直接送人民币 5 元" width="100%" />
+  </a>
+</p>
+
+<p align="center">
+  <strong>PaperForge × Infistar.cc 无限星河｜Claude、GPT、Gemini、Grok、DeepSeek 等全家桶，一个 Key，官方价的零头</strong>
+</p>
+
+- 💥 **低至官方 0.1 折，省 99%**：同样的模型，只花官方价的零头
+- ✅ **官方渠道，100% 官方纯血模型**：不降智、不掺水，每个模型都能验真
+- ⚡ **上千线路安全冗余自动切换**：一条线出问题马上换下一条，不再总是报错
+- 🧩 **200+ 个模型、16 个品牌**：文本、图片、视频一个 Key 全搞定
+- 🏆 **100+ 顶级开源项目都在推荐**，最高 10 万+ star
+- 🎯 **多模型科研任务按需切换，低至官方 0.1 折**
+- 🎁 **PaperForge 用户专属**：通过[专属链接](https://www.infistar.cc/register?aff=A59GBTG8&ref_source=link)注册直接送人民币 **5 元**
+
+👉 [立即注册，领取 PaperForge 专属福利](https://www.infistar.cc/register?aff=A59GBTG8&ref_source=link)
+
+> 以上为赞助商提供的宣传信息，价格、模型与赠金以其页面实时说明为准。PaperForge 当前的模型接入方式见[配置模型和 Key](#配置模型和-key)。
 
 ## 目录
 
@@ -843,12 +864,6 @@ macOS + Ubuntu + Windows
 - [v3 验收检查点](docs/V3_VALIDATION_CHECKPOINT.md)
 - [更新记录](CHANGELOG.md)
 - [第三方声明](THIRD_PARTY_NOTICES.md)
-
-### Linux.do
-
-感谢 [LINUX DO](https://linux.do) 社区提供开放的技术交流环境。README 顶部保留
-原项目的 LINUX DO 徽章，点击即可进入社区。该链接用于社区交流指引，不表示
-LINUX DO 对本项目提供官方背书、担保或商业授权。
 
 ### 许可证
 
