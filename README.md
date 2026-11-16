@@ -1,14 +1,10 @@
 # PaperForge Research OS v3
 
 <p align="center">
-  <a href="https://github.com/QJHWC/PaperForge/actions/workflows/ci.yml">
-    <img src="https://github.com/QJHWC/PaperForge/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" height="20" />
-  </a>
+  <a href="https://github.com/QJHWC/PaperForge/actions/workflows/ci.yml"><img src="https://github.com/QJHWC/PaperForge/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" height="20" /></a>
   <img src="https://img.shields.io/badge/version-v3.0.0-2563eb" alt="Version v3.0.0" height="20" />
   <img src="https://img.shields.io/badge/Python-3.10--3.12-3776ab?logo=python&logoColor=white" alt="Python 3.10-3.12" height="20" />
-  <a href="https://linux.do" target="_blank">
-    <img src="https://img.shields.io/badge/LINUX-DO-FFB003?style=flat&logo=linux&logoColor=white" alt="LINUX DO" height="20" />
-  </a>
+  <a href="https://linux.do" target="_blank"><img src="https://img.shields.io/badge/LINUX-DO-FFB003?style=flat&logo=linux&logoColor=white" alt="LINUX DO" height="20" /></a>
 </p>
 
 PaperForge v3 是一个以证据为中心的科研工作系统，用于研究规划、受控实验、
