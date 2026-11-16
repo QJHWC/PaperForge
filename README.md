@@ -2,10 +2,13 @@
 
 <p align="center">
   <a href="https://github.com/QJHWC/PaperForge/actions/workflows/ci.yml">
-    <img src="https://github.com/QJHWC/PaperForge/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" />
+    <img src="https://github.com/QJHWC/PaperForge/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" height="20" />
   </a>
-  <img src="https://img.shields.io/badge/version-v3.0.0-2563eb" alt="Version v3.0.0" />
-  <img src="https://img.shields.io/badge/Python-3.10--3.12-3776ab?logo=python&logoColor=white" alt="Python 3.10-3.12" />
+  <img src="https://img.shields.io/badge/version-v3.0.0-2563eb" alt="Version v3.0.0" height="20" />
+  <img src="https://img.shields.io/badge/Python-3.10--3.12-3776ab?logo=python&logoColor=white" alt="Python 3.10-3.12" height="20" />
+  <a href="https://linux.do" target="_blank">
+    <img src="https://img.shields.io/badge/LINUX-DO-FFB003?style=flat&logo=linux&logoColor=white" alt="LINUX DO" height="20" />
+  </a>
 </p>
 
 PaperForge v3 是一个以证据为中心的科研工作系统，用于研究规划、受控实验、
@@ -864,6 +867,12 @@ macOS + Ubuntu + Windows
 - [v3 验收检查点](docs/V3_VALIDATION_CHECKPOINT.md)
 - [更新记录](CHANGELOG.md)
 - [第三方声明](THIRD_PARTY_NOTICES.md)
+
+### Linux.do
+
+感谢 [LINUX DO](https://linux.do) 社区提供开放的技术交流环境。README 顶部保留
+原项目的 LINUX DO 徽章，点击即可进入社区。该链接用于社区交流指引，不表示
+LINUX DO 对本项目提供官方背书、担保或商业授权。
 
 ### 许可证
 
