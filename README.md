@@ -23,7 +23,7 @@ Artifact Registry 和 Release Verifier。
 </p>
 
 <p align="center">
-  <strong>PaperForge × Infistar.cc 无限星河｜Claude、GPT、Gemini、Grok、DeepSeek 等全家桶，一个 Key，官方价的零头</strong>
+  <strong>PaperForge × Infistar.cc 无限星河｜Claude、GPT、Gemini、Grok、DeepSeek 全家桶，一个 Key 搞定</strong>
 </p>
 
 - 💥 **低至官方 0.1 折，省 99%**：同样的模型，只花官方价的零头
