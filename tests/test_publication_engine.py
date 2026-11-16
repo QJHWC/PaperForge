@@ -10,7 +10,7 @@ import pytest
 
 from paperforge.claim_manifest import import_latex_claims
 from paperforge.models import ClaimStatus, ClaimType
-from paperforge.protected_blocks import PROTECTED_END, PROTECTED_START
+from paperforge.protected_blocks import PROTECTED_END, PROTECTED_START, extract_protected_blocks
 from paperforge.publication import (
     DEFAULT_TEMPLATE_REGISTRY,
     BibliographyContractError,
@@ -268,8 +268,25 @@ def test_invariant_snapshot_rejects_protected_block_changes() -> None:
         snapshot.verify(original.replace("91.2", "92.1"))
 
 
-def test_publication_engine_runs_at_most_three_verified_rounds(tmp_path: Path) -> None:
-    project = _project(tmp_path)
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("windows_text_mode", [False, True])
+def test_publication_engine_runs_at_most_three_verified_rounds(
+    tmp_path: Path, newline: str, windows_text_mode: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path, body=f"{PROTECTED_START}\nAccuracy is 91.2\\% \\cite{{smith2024}}.\n{PROTECTED_END}")
+    tex = project / "main.tex"
+    tex.write_bytes(tex.read_text(encoding="utf-8").replace("\n", newline).encode("utf-8"))
+    original_blocks = extract_protected_blocks(tex.read_bytes().decode("utf-8"))
+    if windows_text_mode:
+        original_write = Path.write_text
+
+        def windows_write(path, data, encoding=None, errors=None, newline=None):
+            # Exercise Windows text translation on every host without weakening guards.
+            if path.suffix == ".tex" and newline is None:
+                newline = "\r\n"
+            return original_write(path, data, encoding=encoding, errors=errors, newline=newline)
+
+        monkeypatch.setattr(Path, "write_text", windows_write)
     memory, spans = _publication_memory(project, tmp_path)
 
     class FakeCompiler:
@@ -347,6 +364,7 @@ def test_publication_engine_runs_at_most_three_verified_rounds(tmp_path: Path) -
     )
 
     assert result.success
+    assert extract_protected_blocks(tex.read_bytes().decode("utf-8")) == original_blocks
     assert compiler.calls == 3
     assert repairs == [1, 2]
     assert len(result.rounds) == 3

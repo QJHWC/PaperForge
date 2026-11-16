@@ -49,28 +49,28 @@ class ProtectedEditTransaction:
 
     def __post_init__(self) -> None:
         self.path = self.path.expanduser().resolve()
-        self.before_text = self.path.read_text(encoding="utf-8")
+        self.before_text = self.path.read_bytes().decode("utf-8")
         self.before_blocks = extract_protected_blocks(self.before_text)
         if self.require_markers and not self.before_blocks:
             raise ProtectedBlockViolation("protected experiment markers are required")
         self.before_sha256 = protected_blocks_sha256(self.before_text)
 
     def verify(self) -> str:
-        after_text = self.path.read_text(encoding="utf-8")
+        after_text = self.path.read_bytes().decode("utf-8")
         try:
             after_blocks = extract_protected_blocks(after_text)
         except ProtectedBlockViolation:
-            self.path.write_text(self.before_text, encoding="utf-8")
+            self.path.write_bytes(self.before_text.encode("utf-8"))
             raise
         if after_blocks != self.before_blocks:
-            self.path.write_text(self.before_text, encoding="utf-8")
+            self.path.write_bytes(self.before_text.encode("utf-8"))
             raise ProtectedBlockViolation(
                 "protected experiment content changed; edit was rolled back"
             )
         return protected_blocks_sha256(after_text)
 
     def rollback(self) -> None:
-        self.path.write_text(self.before_text, encoding="utf-8")
+        self.path.write_bytes(self.before_text.encode("utf-8"))
 
 
 class ProtectedCoder:

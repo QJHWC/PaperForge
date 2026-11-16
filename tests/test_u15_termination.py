@@ -62,7 +62,7 @@ def test_legacy_string_coerced_to_unknown() -> None:
 
 def test_structured_length_rejects_write_even_if_complete(tmp_path: Path) -> None:
     tex = tmp_path / "paper.tex"
-    tex.write_text(_document("Original prose."), encoding="utf-8")
+    tex.write_bytes(_document("Original prose.").encode("utf-8"))
     candidate = _document("Changed prose.")  # syntactically perfect
     service = PaperForgeService(tmp_path)
     engine = WritingEngine(
@@ -78,12 +78,12 @@ def test_structured_length_rejects_write_even_if_complete(tmp_path: Path) -> Non
             payload={"main_tex": "paper.tex", "instructions": "x"},
             model="bailu-turing",
         )
-    assert tex.read_text(encoding="utf-8") == _document("Original prose.")
+    assert tex.read_bytes() == _document("Original prose.").encode("utf-8")
 
 
 def test_structured_stop_allows_write_and_audits_termination(tmp_path: Path) -> None:
     tex = tmp_path / "paper.tex"
-    tex.write_text(_document("Original prose."), encoding="utf-8")
+    tex.write_bytes(_document("Original prose.").encode("utf-8"))
     candidate = _document("Changed prose.")
     service = PaperForgeService(tmp_path)
     engine = WritingEngine(
@@ -105,7 +105,7 @@ def test_structured_stop_allows_write_and_audits_termination(tmp_path: Path) -> 
 
 def test_old_string_call_still_writes_with_unknown_audit(tmp_path: Path) -> None:
     tex = tmp_path / "paper.tex"
-    tex.write_text(_document("Original prose."), encoding="utf-8")
+    tex.write_bytes(_document("Original prose.").encode("utf-8"))
     candidate = _document("Changed prose.")
     service = PaperForgeService(tmp_path)
     engine = WritingEngine(

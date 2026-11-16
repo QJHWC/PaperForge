@@ -28,7 +28,7 @@ def test_writing_rolls_back_when_artifact_registration_fails(
 ) -> None:
     tex = tmp_path / "paper.tex"
     original = _document("Original prose.")
-    tex.write_text(original, encoding="utf-8")
+    tex.write_bytes(original.encode("utf-8"))
     candidate = _document("Changed prose.")
     service = PaperForgeService(tmp_path)
     engine = WritingEngine(
@@ -54,7 +54,7 @@ def test_writing_rolls_back_when_artifact_registration_fails(
             model="bailu-turing",
         )
 
-    assert tex.read_text(encoding="utf-8") == original
+    assert tex.read_bytes() == original.encode("utf-8")
 
 
 def test_writing_rejects_protected_experiment_changes_before_write(
@@ -62,7 +62,7 @@ def test_writing_rejects_protected_experiment_changes_before_write(
 ) -> None:
     tex = tmp_path / "paper.tex"
     original = _document("Original prose.")
-    tex.write_text(original, encoding="utf-8")
+    tex.write_bytes(original.encode("utf-8"))
     candidate = _document("Changed prose.", protected="Invented result.")
     service = PaperForgeService(tmp_path)
     engine = WritingEngine(
@@ -81,4 +81,4 @@ def test_writing_rejects_protected_experiment_changes_before_write(
             model="bailu-turing",
         )
 
-    assert tex.read_text(encoding="utf-8") == original
+    assert tex.read_bytes() == original.encode("utf-8")

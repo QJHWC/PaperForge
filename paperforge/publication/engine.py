@@ -156,7 +156,7 @@ class PublicationEngine:
                 + json.dumps(failures, ensure_ascii=False, default=str)
             )
 
-        tex_text = tex_path.read_text(encoding="utf-8")
+        tex_text = tex_path.read_bytes().decode("utf-8")
         selected_profile = self._select_profile(template, profile, tex_text)
         claim_manifest = None
         effective_claim_spans = dict(claim_spans or {})
@@ -250,7 +250,7 @@ class PublicationEngine:
 
             if diagnosis.clean:
                 try:
-                    invariant.verify(tex_path.read_text(encoding="utf-8"))
+                    invariant.verify(tex_path.read_bytes().decode("utf-8"))
                 except PublicationInvariantViolation as exc:
                     issue = PublicationIssue(
                         "INVARIANT_VIOLATION",
@@ -272,7 +272,7 @@ class PublicationEngine:
 
             context = RepairContext(
                 round_number=round_number,
-                source_text=tex_path.read_text(encoding="utf-8"),
+                source_text=tex_path.read_bytes().decode("utf-8"),
                 tex_path=tex_path,
                 profile=selected_profile,
                 diagnosis=diagnosis,
@@ -299,7 +299,7 @@ class PublicationEngine:
                 break
 
             repair_side_effect = (
-                tex_path.read_text(encoding="utf-8") != transaction.before_text
+                tex_path.read_bytes().decode("utf-8") != transaction.before_text
                 or not bibliography_path.is_file()
                 or bibliography_path.read_bytes() != bibliography_baseline
             )
@@ -332,7 +332,7 @@ class PublicationEngine:
                 break
 
             try:
-                tex_path.write_text(proposal.source_text, encoding="utf-8")
+                tex_path.write_bytes(proposal.source_text.encode("utf-8"))
                 transaction.verify()
                 invariant.verify(proposal.source_text)
                 if (
